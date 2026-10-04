@@ -3,13 +3,17 @@
 Nothing here can return data for a second later than `t`.
 """
 
+from array import array
 from functools import lru_cache
 
-from app.config import SESSION_DATE, SESSION_SECONDS
-from app.timeutil import cents_to_usd, date_epoch, sim_epoch
+from app.config import SEED_CACHE, SESSION_DATE, SESSION_SECONDS
+from app.timeutil import cents_to_usd, date_epoch, fmt_hhmmss, sim_epoch
 from app.world.generate import World, build_world
 
 TIMEFRAMES: dict[str, int | None] = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1D": None}
+# Prior sessions shown before today on each intraday timeframe (all bars are in the past).
+HISTORY_SESSIONS = {"1m": 5, "5m": 20, "15m": 60, "1h": 60}
+OPEN_OFFSET = 9 * 3600  # 09:00 in seconds after midnight
 
 Agg = tuple[int, int, int, int, int]  # o, h, l, c, v
 
@@ -30,13 +34,13 @@ def _combine(parts: list[Agg]) -> Agg:
 
 
 class SymbolSeries:
-    def __init__(self, px: tuple[int, ...], vol: tuple[int, ...]):
+    def __init__(self, px: array, vol: array):
         self.px = px
         self.vol = vol
         n = len(px)
-        self.cumvol = [0] * (n + 1)
-        self.run_hi = [0] * n
-        self.run_lo = [0] * n
+        self.cumvol = array("q", bytes(8 * (n + 1)))
+        self.run_hi = array("q", bytes(8 * n))
+        self.run_lo = array("q", bytes(8 * n))
         hi, lo, cv = px[0], px[0], 0
         for s in range(n):
             p = px[s]
@@ -63,6 +67,18 @@ class MarketData:
     def __init__(self, world: World):
         self.world = world
         self.series = [SymbolSeries(world.px[i], world.vol[i]) for i in range(len(world.symbols))]
+
+    def history_bars(self, sid: int, tf: str) -> list[dict]:
+        """Completed bars of prior sessions for an intraday timeframe (computed per call)."""
+        per = TIMEFRAMES[tf] // 60  # minutes per bar
+        out = []
+        for sess in self.world.history[sid - 1][-HISTORY_SESSIONS[tf] :]:
+            base = date_epoch(sess.date) + OPEN_OFFSET
+            minutes = sess.minutes
+            for m in range(0, len(minutes), per):
+                agg = _combine(minutes[m : m + per])
+                out.append(_bar(base + m * 60, sess.date, fmt_hhmmss(m * 60)[:5], agg))
+        return out
 
     def price(self, sid: int, t: int) -> int:
         return self.series[sid - 1].px[last_idx(t)]
@@ -99,28 +115,46 @@ class MarketData:
             "range_pct": round((ser.run_hi[i] - ser.run_lo[i]) / ser.px[0] * 100, 2),
         }
 
-    def bars(self, sid: int, tf: str, t: int) -> list[dict]:
+    def bars(self, sid: int, tf: str, t: int, last: int | None = None) -> list[dict]:
+        """All bars up to t, or only the newest `last` bars (cheap; used for live pushes)."""
         if tf not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {tf!r}")
         ser = self.series[sid - 1]
         i = last_idx(t)
         width = TIMEFRAMES[tf]
         if width is None:
+            if last is not None:
+                prior = self.world.daily[sid - 1][-(last - 1) :] if last > 1 else []
+                return [
+                    _bar(date_epoch(b.date), b.date, b.date, (b.o, b.h, b.l, b.c, b.v))
+                    for b in prior
+                ] + [_bar(date_epoch(SESSION_DATE), SESSION_DATE, SESSION_DATE, ser.agg(0, i))]
             out = [
-                _bar(date_epoch(b.date), (b.o, b.h, b.l, b.c, b.v))
+                _bar(date_epoch(b.date), b.date, b.date, (b.o, b.h, b.l, b.c, b.v))
                 for b in self.world.daily[sid - 1]
             ]
-            out.append(_bar(date_epoch(SESSION_DATE), ser.agg(0, i)))
+            out.append(_bar(date_epoch(SESSION_DATE), SESSION_DATE, SESSION_DATE, ser.agg(0, i)))
             return out
-        return [
-            _bar(sim_epoch(a), ser.agg(a, min(a + width - 1, i))) for a in range(0, i + 1, width)
+        starts = range(0, i + 1, width)
+        if last is not None:
+            starts = starts[-last:]
+        today = [
+            _bar(sim_epoch(a), SESSION_DATE, fmt_hhmmss(a)[:5], ser.agg(a, min(a + width - 1, i)))
+            for a in starts
         ]
+        if last is not None and len(today) >= last:
+            return today  # live pushes only need the newest bars
+        history = self.history_bars(sid, tf)
+        return (history + today)[-last:] if last is not None else history + today
 
 
-def _bar(time: int, agg: Agg) -> dict:
+def _bar(time: int, date: str, label: str, agg: Agg) -> dict:
+    """One bar. `label` is its open time (HH:MM), or its date for daily bars."""
     o, h, lo, c, v = agg
     return {
         "time": time,
+        "date": date,
+        "label": label,
         "o": cents_to_usd(o),
         "h": cents_to_usd(h),
         "l": cents_to_usd(lo),
@@ -129,6 +163,6 @@ def _bar(time: int, agg: Agg) -> dict:
     }
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=SEED_CACHE)
 def market_for_seed(seed: int) -> MarketData:
     return MarketData(build_world(seed))

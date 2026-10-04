@@ -7,10 +7,11 @@ import sqlite3
 from functools import lru_cache
 from pathlib import Path
 
+from app.config import SEED_CACHE
 from app.world.generate import World, build_world
 
 SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
-WORLD_TABLES = ("symbols", "path", "daily_bars")
+WORLD_TABLES = ("symbols", "path", "intraday_bars", "daily_bars")
 STATE_TABLES = (
     "account",
     "positions",
@@ -45,13 +46,21 @@ def write_world(conn: sqlite3.Connection, world: World) -> None:
             ((s.id, i, px[i], vol[i]) for i in range(len(px))),
         )
         conn.executemany(
+            "INSERT INTO intraday_bars VALUES (?,?,?,?,?,?,?,?)",
+            (
+                (s.id, sess.date, m, *bar)
+                for sess in world.history[s.id - 1]
+                for m, bar in enumerate(sess.minutes)
+            ),
+        )
+        conn.executemany(
             "INSERT INTO daily_bars VALUES (?,?,?,?,?,?,?)",
             [(s.id, b.date, b.o, b.h, b.l, b.c, b.v) for b in world.daily[s.id - 1]],
         )
     conn.execute("COMMIT")
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=SEED_CACHE)
 def _template(seed: int) -> sqlite3.Connection:
     conn = connect()
     write_world(conn, build_world(seed))
@@ -69,7 +78,8 @@ def new_episode_db(seed: int, path: str | Path = ":memory:") -> sqlite3.Connecti
 
 def _dump(conn: sqlite3.Connection, table: str, exclude: tuple[str, ...] = ()) -> bytes:
     cols = [r[1] for r in conn.execute(f"PRAGMA table_info({table})") if r[1] not in exclude]
-    rows = conn.execute(f"SELECT {','.join(cols)} FROM {table} ORDER BY 1,2").fetchall()
+    order = ",".join(str(i + 1) for i in range(min(3, len(cols))))
+    rows = conn.execute(f"SELECT {','.join(cols)} FROM {table} ORDER BY {order}").fetchall()
     return json.dumps([table, cols, [tuple(r) for r in rows]], separators=(",", ":")).encode()
 
 

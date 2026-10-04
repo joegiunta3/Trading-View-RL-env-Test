@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Colors map to tokens set at runtime from src/theme.ts; no literal colors here. */
+@theme inline {
+  --color-bg: var(--cv-bg);
+  --color-panel: var(--cv-panel);
+  --color-raised: var(--cv-panelRaised);
+  --color-hover: var(--cv-hover);
+  --color-line: var(--cv-border);
+  --color-line-strong: var(--cv-borderStrong);
+  --color-text: var(--cv-text);
+  --color-strong: var(--cv-textStrong);
+  --color-muted: var(--cv-muted);
+  --color-faint: var(--cv-faint);
+  --color-up: var(--cv-up);
+  --color-down: var(--cv-down);
+  --color-accent: var(--cv-accent);
+  --color-accent-soft: var(--cv-accentSoft);
+  --color-warn: var(--cv-warn);
+  --color-up-soft: var(--cv-upSoft);
+  --color-down-soft: var(--cv-downSoft);
+  --color-overlay: var(--cv-overlay);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--cv-bg);
+  color: var(--cv-text);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input[type="number"]::-webkit-inner-spin-button {
+  opacity: 0.4;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--cv-borderStrong);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:focus-visible {
+  outline: 1px solid var(--cv-accent);
+  outline-offset: 1px;
+}

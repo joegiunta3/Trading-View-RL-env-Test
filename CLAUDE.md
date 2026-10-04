@@ -40,9 +40,11 @@ A deterministic, resettable, fake dark-mode charting and paper-trading web app (
 - Optional hook: run `ruff` and a fast pytest subset before each commit.
 
 ## Commands (fill in as they are created)
-- Setup: `uv sync` (Python 3.12, pinned deps in `pyproject.toml` / `uv.lock`)
+- Setup: `uv sync` (Python 3.12, pinned deps in `pyproject.toml` / `uv.lock`), then `cd frontend && npm ci && npx playwright install chromium`
+- Build UI: `cd frontend && npm run build` (FastAPI serves `frontend/dist` at http://127.0.0.1:8080/; restart the server after rebuilding)
 - Run app: `CHARTVIEW_ENV_TOKEN=<token> uv run python -m app.main` (app on :8080, env API on :9090; add `--dev-seed 1234` to auto-reset and start a realtime episode)
-- Tests: `uv run pytest` (backend), `npx playwright test` (from Stage 2)
+- UI dev server: `cd frontend && npm run dev` (Vite with hot reload; proxies /api and /ws to :8080)
+- Tests: `uv run pytest` (backend + frontend static checks), `cd frontend && npx playwright test` (builds the UI, starts the server on :18080/:19090, fixed-step clock)
 - Lint/format: `uv run ruff check . && uv run ruff format --check .`
 - Seed: `uv run python -m app.seed --seed 1234` (writes `data/seed-1234/world.db` + `world_truth.json`, prints the world hash)
 - Eval: `python -m harness.eval --tasks all --seeds 5` (from Stage 4)

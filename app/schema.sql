@@ -15,7 +15,18 @@ CREATE TABLE path (
     volume INTEGER NOT NULL,
     PRIMARY KEY (symbol_id, sim_sec)
 ) WITHOUT ROWID;
-CREATE TABLE daily_bars (
+CREATE TABLE intraday_bars (     -- prior sessions at 1-minute resolution
+    symbol_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    minute INTEGER NOT NULL,         -- 0 = 09:00 .. 449 = 16:29
+    o INTEGER NOT NULL,
+    h INTEGER NOT NULL,
+    l INTEGER NOT NULL,
+    c INTEGER NOT NULL,
+    v INTEGER NOT NULL,
+    PRIMARY KEY (symbol_id, date, minute)
+) WITHOUT ROWID;
+CREATE TABLE daily_bars (            -- derived from intraday_bars
     symbol_id INTEGER NOT NULL,
     date TEXT NOT NULL,
     o INTEGER NOT NULL,

@@ -4,14 +4,17 @@ Every response is computed from data up to sim_now only.
 """
 
 import asyncio
+from html import escape
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from app.config import APP_NAME, SESSION_DATE
+from app.config import APP_NAME, FRONTEND_DIST, SESSION_DATE
 from app.engine.errors import EngineError
 from app.episode import Episode
 from app.holder import EnvHolder
@@ -67,7 +70,7 @@ class UiStateIn(BaseModel):
 SCREENER_SORT = ("ticker", "last", "change_pct", "volume", "range_pct", "sector")
 
 
-def create_public_app(holder: EnvHolder) -> FastAPI:
+def create_public_app(holder: EnvHolder, frontend_dist: Path | None = FRONTEND_DIST) -> FastAPI:
     app = FastAPI(title=APP_NAME, docs_url=None, redoc_url=None, openapi_url=None)
 
     def ep() -> Episode:
@@ -229,7 +232,24 @@ def create_public_app(holder: EnvHolder) -> FastAPI:
     async def ws(socket: WebSocket) -> None:
         await stream(socket, holder)
 
+    if frontend_dist is not None and (frontend_dist / "index.html").exists():
+        mount_frontend(app, frontend_dist)
     return app
+
+
+def mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serve the built SPA: index.html at / (APP_NAME injected) and hashed assets.
+
+    Deliberately no catch-all route, so unknown paths (including /_env/*) stay 404.
+    """
+    index = (dist / "index.html").read_text().replace("__APP_NAME__", escape(APP_NAME))
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def root() -> HTMLResponse:
+        return HTMLResponse(index)
+
+    if (dist / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
 
 def tick_frame(e: Episode, sub: dict | None) -> dict:
@@ -240,7 +260,7 @@ def tick_frame(e: Episode, sub: dict | None) -> dict:
             frame["bars"] = {
                 "ticker": sub["ticker"].upper(),
                 "timeframe": sub["tf"],
-                "bars": e.bars(sub["ticker"], sub["tf"])[-2:],
+                "bars": e.bars(sub["ticker"], sub["tf"], last=2),
             }
         except (EngineError, KeyError, AttributeError):
             frame["bars"] = None

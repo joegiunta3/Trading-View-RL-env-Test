@@ -79,7 +79,8 @@ def test_double_start_and_bad_start_time():
 def test_episode_start_time_noon_has_morning_history():
     e = make_episode(start_time="12:00")
     assert e.now == 10800
-    assert len(e.bars("AAPL", "1m")) == 181  # 09:00 .. 12:00 inclusive (12:00 forming)
+    today = [b for b in e.bars("AAPL", "1m") if b["date"] == "2026-01-15"]
+    assert len(today) == 181  # 09:00 .. 12:00 inclusive (12:00 forming)
     o = order(e, "AAPL", "buy", "market", 1)
     assert o["filled_sim_ts"] == 10800
 

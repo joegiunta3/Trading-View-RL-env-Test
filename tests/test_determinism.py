@@ -15,9 +15,12 @@ from app.world.generate import build_world
 from tests.conftest import make_episode, order
 
 SEEDS = [1, 7, 1234, 99999]
+# Changelog: 2026-10-04 regenerated after the intentional addition of 60 prior sessions of
+# 1-minute history (daily bars now derived from it; breakout uses the real prior-session high),
+# with US market holidays (Thanksgiving, Christmas, New Year's Day) excluded from the sessions.
 GOLDEN = {
-    1234: "de9b144cbaf893d3671ca9856c95ee00103ad207b94f7dfede091924f37a520f",
-    99999: "483ec45a77e32925eac1f93b2c62f2fd6b9d4f4cb178bb270e3f4d254d3105b0",
+    1234: "cdec61c0fae48558ab2d6adf35c7e3665a1c8ed91f67d20dc98f615104c795f8",
+    99999: "21abfec3de2c9ea840a182566ad94a5bc64dfc7e19d2af284c09e9a6e4f1fbe7",
 }
 
 

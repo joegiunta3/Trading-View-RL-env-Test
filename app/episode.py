@@ -4,6 +4,7 @@ Every operation first calls sync(), which processes each elapsed sim second in o
 outcomes depend only on sim timing and never on how often the server loop runs.
 """
 
+import functools
 import json
 import secrets
 import sqlite3
@@ -28,6 +29,17 @@ MAX_SMA_PERIOD = 500
 MAX_INDICATORS = 10
 MAX_NAME_LEN = 40
 MAX_NOTE_LEN = 200
+
+
+def _locked(method: Callable) -> Callable:
+    """Serialize access: one sqlite connection is shared by request threads and the ticker."""
+
+    @functools.wraps(method)
+    def wrapper(self: "Episode", *args, **kwargs):
+        with self.lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _cents(usd: float | None, field: str) -> int | None:
@@ -150,6 +162,7 @@ class Episode:
     def now(self) -> int:
         return self.clock.now
 
+    @_locked
     def sync(self) -> int:
         """Process every elapsed sim second up to now; handle the close. Returns sim_now."""
         with self._tx():
@@ -194,6 +207,7 @@ class Episode:
                 if not (has_orders or has_alerts):
                     return
 
+    @_locked
     def start(self) -> dict:
         with self._tx():
             try:
@@ -203,6 +217,7 @@ class Episode:
             self._log("env:start", {})
             return self.clock_view()
 
+    @_locked
     def advance(self, sim_seconds: int) -> dict:
         with self._tx():
             try:
@@ -212,6 +227,7 @@ class Episode:
             self.sync()
             return self.clock_view()
 
+    @_locked
     def clock_view(self) -> dict:
         now = self.sync()
         state = self.clock.state
@@ -225,46 +241,55 @@ class Episode:
             "session_close": "16:30:00",
         }
 
+    @_locked
     def events_since(self, seq: int) -> list[dict]:
         with self.lock:
             return self._events[seq:]
 
     # --- market views ----------------------------------------------------------------------
 
+    @_locked
     def symbols(self) -> list[dict]:
         return [
             {"ticker": s.ticker, "name": s.name, "sector": s.sector} for s in self.world.symbols
         ]
 
+    @_locked
     def quotes(self) -> list[dict]:
         t = self.sync()
         return [self.market.quote(s.id, t) for s in self.world.symbols]
 
+    @_locked
     def quote(self, ticker: str) -> dict:
         t = self.sync()
         return self.market.quote(self._sid(ticker), t)
 
-    def bars(self, ticker: str, tf: str) -> list[dict]:
+    @_locked
+    def bars(self, ticker: str, tf: str, last: int | None = None) -> list[dict]:
         t = self.sync()
         if tf not in TIMEFRAMES:
             raise EngineError(f"Unknown timeframe {tf!r}. Use one of {', '.join(TIMEFRAMES)}.", 422)
-        return self.market.bars(self._sid(ticker), tf, t)
+        return self.market.bars(self._sid(ticker), tf, t, last)
 
     # --- trading ---------------------------------------------------------------------------
 
+    @_locked
     def account_summary(self) -> dict:
         t = self.sync()
         return account.summary(self.conn, self.market, t)
 
+    @_locked
     def positions(self) -> list[dict]:
         t = self.sync()
         return account.public_positions(self.conn, self.market, t)
 
+    @_locked
     def list_orders(self) -> list[dict]:
         self.sync()
         rows = self.conn.execute("SELECT * FROM orders ORDER BY id DESC").fetchall()
         return [orders.order_view(self.conn, r) for r in rows]
 
+    @_locked
     def trades(self) -> list[dict]:
         self.sync()
         rows = self.conn.execute(
@@ -285,6 +310,7 @@ class Episode:
             for r in rows
         ]
 
+    @_locked
     def place_order(self, req: dict) -> dict:
         error: EngineError | None = None
         with self._tx():
@@ -335,6 +361,7 @@ class Episode:
                 )
             return view
 
+    @_locked
     def cancel_order(self, order_id: int) -> dict:
         with self._tx():
             t = self.sync()
@@ -346,6 +373,7 @@ class Episode:
 
     # --- watchlists ------------------------------------------------------------------------
 
+    @_locked
     def watchlists(self) -> list[dict]:
         out = []
         for w in self.conn.execute("SELECT * FROM watchlists ORDER BY id").fetchall():
@@ -376,6 +404,7 @@ class Episode:
             raise EngineError(f"A watchlist named {name!r} already exists.", 409)
         return name
 
+    @_locked
     def create_watchlist(self, name: str) -> dict:
         with self._tx():
             self.sync()
@@ -384,6 +413,7 @@ class Episode:
             self._log("POST /api/watchlists", {"name": name, "id": cur.lastrowid})
             return self._watchlist(cur.lastrowid)
 
+    @_locked
     def rename_watchlist(self, wid: int, name: str) -> dict:
         with self._tx():
             self.sync()
@@ -393,6 +423,7 @@ class Episode:
             self._log("PATCH /api/watchlists", {"id": wid, "name": name})
             return self._watchlist(wid)
 
+    @_locked
     def delete_watchlist(self, wid: int) -> None:
         with self._tx():
             self.sync()
@@ -403,6 +434,7 @@ class Episode:
             self.conn.execute("DELETE FROM watchlists WHERE id = ?", (wid,))
             self._log("DELETE /api/watchlists", {"id": wid})
 
+    @_locked
     def add_watchlist_item(self, wid: int, ticker: str) -> dict:
         with self._tx():
             self.sync()
@@ -418,6 +450,7 @@ class Episode:
             self._log("POST /api/watchlists/items", {"id": wid, "ticker": self._ticker(sid)})
             return self._watchlist(wid)
 
+    @_locked
     def remove_watchlist_item(self, wid: int, ticker: str) -> dict:
         with self._tx():
             self.sync()
@@ -433,11 +466,13 @@ class Episode:
 
     # --- alerts ----------------------------------------------------------------------------
 
+    @_locked
     def list_alerts(self) -> list[dict]:
         self.sync()
         rows = self.conn.execute("SELECT * FROM alerts ORDER BY id").fetchall()
         return [alerts.alert_view(self.conn, r) for r in rows]
 
+    @_locked
     def alert_log(self) -> list[dict]:
         self.sync()
         rows = self.conn.execute(
@@ -458,6 +493,7 @@ class Episode:
             for r in rows
         ]
 
+    @_locked
     def create_alert(self, ticker: str, condition: str, price: float, note: str = "") -> dict:
         with self._tx():
             t = self.sync()
@@ -477,6 +513,7 @@ class Episode:
             )
             return alerts.alert_view(self.conn, alerts.get_alert(self.conn, aid))
 
+    @_locked
     def update_alert(self, alert_id: int, changes: dict) -> dict:
         with self._tx():
             t = self.sync()
@@ -490,6 +527,7 @@ class Episode:
             self._log("PATCH /api/alerts", {"id": alert_id, "changes": changes})
             return alerts.alert_view(self.conn, alerts.get_alert(self.conn, alert_id))
 
+    @_locked
     def delete_alert(self, alert_id: int) -> None:
         with self._tx():
             self.sync()
@@ -505,6 +543,7 @@ class Episode:
 
     # --- chart preferences / UI state ---------------------------------------------------------
 
+    @_locked
     def get_chart_prefs(self, ticker: str) -> dict:
         sid = self._sid(ticker)
         row = self.conn.execute("SELECT * FROM chart_prefs WHERE symbol_id = ?", (sid,)).fetchone()
@@ -516,6 +555,7 @@ class Episode:
             "indicators": json.loads(row["indicators_json"]),
         }
 
+    @_locked
     def set_chart_prefs(self, ticker: str, timeframe: str, indicators: list[dict]) -> dict:
         with self._tx():
             self.sync()
@@ -560,10 +600,12 @@ class Episode:
                 raise EngineError(f"Unknown indicator {kind!r}. Available: sma, volume.", 422)
         return out
 
+    @_locked
     def get_ui_state(self) -> dict:
         rows = self.conn.execute("SELECT key, value FROM ui_state").fetchall()
         return {r["key"]: r["value"] for r in rows}
 
+    @_locked
     def set_active_symbol(self, ticker: str) -> dict:
         with self._tx():
             self.sync()
@@ -578,6 +620,7 @@ class Episode:
 
     # --- harness-only views ---------------------------------------------------------------------
 
+    @_locked
     def state(self) -> dict:
         with self._tx():
             now = self.sync()
@@ -606,6 +649,7 @@ class Episode:
                 "tables": tables,
             }
 
+    @_locked
     def trace(self) -> list[dict]:
         with self.lock:
             rows = self.conn.execute("SELECT * FROM action_log ORDER BY id").fetchall()

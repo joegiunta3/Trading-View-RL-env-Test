@@ -20,4 +20,13 @@ ENV_PORT = int(os.environ.get("CHARTVIEW_ENV_PORT", "9090"))
 ENV_TOKEN_VAR = "CHARTVIEW_ENV_TOKEN"
 ENV_TOKEN_HEADER = "X-Env-Token"
 
+# How many seeds' worlds stay cached in memory (each ~100 MB incl. DB template).
+SEED_CACHE = int(os.environ.get("CHARTVIEW_SEED_CACHE", "4"))
+
 DATA_DIR = Path(os.environ.get("CHARTVIEW_DATA_DIR", "data"))
+
+FRONTEND_DIST = Path(
+    os.environ.get(
+        "CHARTVIEW_FRONTEND_DIST", Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    )
+)

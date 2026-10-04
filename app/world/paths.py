@@ -16,7 +16,7 @@ REGIMES = (
 )
 
 
-def _next_regime(rng: random.Random) -> int:
+def next_regime(rng: random.Random) -> int:
     r = rng.random()
     if r < 0.4:
         return 0
@@ -47,7 +47,7 @@ def gen_intraday(
     left = rng.randint(180, 1500)
     for s in range(n):
         if left == 0:
-            regime = _next_regime(rng)
+            regime = next_regime(rng)
             left = rng.randint(180, 1500)
         _, drift, vm, volm = REGIMES[regime]
         if s > 0:

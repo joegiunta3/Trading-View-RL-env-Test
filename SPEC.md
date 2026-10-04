@@ -51,7 +51,7 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 ## 5. Market simulation
 
 - **Universe:** 20 real US tickers across 5 sectors (4 each), names only. Prices, history and scenarios are fully synthetic and seeded, and starting price levels are not meant to match real quotes, so knowledge of the real market gives no advantage. No logos or brand assets.
-- **Price path:** for each symbol, pre-generate the whole session from the seed at 1-sim-second resolution (regime-switching random walk with intraday volume profile), plus 60 prior daily bars for the 1D chart and SMA. The clock only reveals the path progressively; nothing future is sent to the browser.
+- **Price path:** for each symbol, pre-generate the whole session from the seed at 1-sim-second resolution (regime-switching random walk with intraday volume profile), plus 60 prior sessions at 1-minute resolution (weekdays, excluding US market holidays). Prior daily bars are derived from those minutes, and intraday charts show prior sessions before today (1m: 5 sessions, 5m: 20, 15m and 1h: 60). The clock only reveals today's path progressively; nothing future is sent to the browser.
 - **Streaming:** the server pushes the latest price and bar updates once per real second (every 6 sim seconds). Bars (1m, 5m, 15m, 1h, 1D) are built from the path.
 - **Spread:** each symbol has a seeded fixed spread (e.g. 1-5 cents). Quotes show bid/ask around the path price.
 - **Planted scenarios** (generated from the seed, recorded in `world_truth.json`, never exposed through the UI or API):
@@ -92,7 +92,8 @@ Login: auto-signed in as a single seeded account. Seeded starting positions may 
 
 - `symbols(id, ticker, name, sector, spread)`
 - `path(symbol_id, sim_sec, price, volume)` full session at 1-second resolution (server-only, never sent whole)
-- `daily_bars(symbol_id, date, o, h, l, c, v)` 60 prior days
+- `intraday_bars(symbol_id, date, minute, o, h, l, c, v)` 60 prior sessions at 1-minute resolution
+- `daily_bars(symbol_id, date, o, h, l, c, v)` 60 prior days, derived from `intraday_bars`
 - `account(id, cash, start_cash)`; `positions(symbol_id, qty, avg_price)` (qty negative = short)
 - `orders(id, symbol_id, side, type, qty, limit_price, stop_price, status, created_sim_ts, filled_sim_ts, fill_price)`
 - `trades(id, order_id, symbol_id, qty, price, sim_ts)`

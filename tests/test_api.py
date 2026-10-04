@@ -7,8 +7,9 @@ from fastapi.testclient import TestClient
 
 from app.api.env import create_env_app
 from app.api.public import create_public_app
-from app.config import SESSION_SECONDS
+from app.config import SESSION_DATE, SESSION_SECONDS
 from app.holder import EnvHolder
+from app.market import HISTORY_SESSIONS
 from app.timeutil import cents_to_usd, sim_epoch
 
 TOKEN = "test-token"
@@ -213,8 +214,15 @@ def test_no_future_data_in_public_responses(clients, t):
         sid = e.world.by_ticker[sym].id
         path, vol = e.world.px[sid - 1], e.world.vol[sid - 1]
         for tf, width in (("1m", 60), ("5m", 300), ("15m", 900), ("1h", 3600)):
-            bars = resp[f"bars/{sym}/{tf}"]["bars"]
-            assert bars[-1]["time"] <= sim_epoch(i)
+            all_bars = resp[f"bars/{sym}/{tf}"]["bars"]
+            assert all(b["time"] <= sim_epoch(i) for b in all_bars)
+            assert [b["time"] for b in all_bars] == sorted({b["time"] for b in all_bars})
+            history = [b for b in all_bars if b["date"] != SESSION_DATE]
+            bars = [b for b in all_bars if b["date"] == SESSION_DATE]
+            assert all(b["date"] < SESSION_DATE for b in history)
+            per_session = -(-SESSION_SECONDS // width)  # ceil: 1h has a final 30-minute bar
+            assert len(history) == HISTORY_SESSIONS[tf] * per_session
+            assert all_bars[: len(history)] == history  # history first, then today
             assert len(bars) == i // width + 1
             assert bars[-1]["c"] == cents_to_usd(path[i])
             # forming bar equals an independent aggregation of path[a..i]

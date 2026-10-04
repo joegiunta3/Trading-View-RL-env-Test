@@ -1,18 +1,20 @@
 """build_world(seed): the full deterministic world (pure, no I/O)."""
 
 import json
+from array import array
 from dataclasses import dataclass
 from functools import cached_property, lru_cache
 
-from app.config import SESSION_DATE
+from app.config import SEED_CACHE, SESSION_DATE
 from app.rng import derive_rng
 from app.timeutil import fmt_hhmmss, parse_hhmm
 from app.world import scenarios as sc
-from app.world.daily import DailyBar, gen_daily
+from app.world.daily import DailyBar, Session, gen_history
 from app.world.paths import gen_intraday
 from app.world.universe import Symbol, base_universe
 
 MAX_ATTEMPTS = 100
+MAX_BREAKOUT_SUBATTEMPTS = 200
 ROLES = ("gap", "breakout", "sharp_drop", "fakeout", "volume_surge", "spike")
 
 
@@ -21,9 +23,10 @@ class World:
     seed: int
     attempt: int
     symbols: tuple[Symbol, ...]
-    px: tuple[tuple[int, ...], ...]  # [symbol index][sim_sec] price in cents
-    vol: tuple[tuple[int, ...], ...]  # [symbol index][sim_sec] shares
-    daily: tuple[tuple[DailyBar, ...], ...]
+    px: tuple[array, ...]  # [symbol index][sim_sec] price in cents (array "q")
+    vol: tuple[array, ...]  # [symbol index][sim_sec] shares (array "q")
+    daily: tuple[tuple[DailyBar, ...], ...]  # derived from `history`
+    history: tuple[tuple[Session, ...], ...]  # [symbol index][session] 1-minute bars
     default_watchlist: tuple[str, ...]
     truth_json: str  # canonical JSON; never served to the agent
 
@@ -52,7 +55,7 @@ def _attempt(seed: int, attempt: int) -> World:
     surge_factor = srng.uniform(4.0, 6.0)
     role_of = {t: r for r, t in roles.items()}
 
-    symbols, pxs, vols, dailies = [], [], [], []
+    symbols, pxs, vols, dailies, histories = [], [], [], [], []
     truth_sc: dict[str, dict] = {}
     for idx, (ticker, name, sector) in enumerate(universe):
         prng = derive_rng(seed, attempt, "params", ticker)
@@ -63,73 +66,76 @@ def _attempt(seed: int, attempt: int) -> World:
         overnight = prng.uniform(-0.008, 0.008)
         symbols.append(Symbol(idx + 1, ticker, name, sector, spread))
 
-        daily = gen_daily(
-            derive_rng(seed, attempt, "daily", ticker), start_px, daily_vol, base_volume
+        history = gen_history(
+            derive_rng(seed, attempt, "history", ticker), start_px, daily_vol, base_volume
         )
+        daily = [s.daily() for s in history]
         prior_close = daily[-1].c
         role = role_of.get(ticker)
         if role == "gap":
             overnight = gap_sign * gap_mag
         elif role == "breakout":
-            overnight = abs(overnight)  # open >= prior close keeps the prior-day high above it
+            overnight = -abs(overnight)  # open at/below prior close leaves room under the high
         open_px = prior_close / 100.0 * (1.0 + overnight)
-        base, fvol = gen_intraday(
-            derive_rng(seed, attempt, "path", ticker), open_px, daily_vol, base_volume
-        )
 
         entry: dict = {"ticker": ticker}
         if role == "breakout":
-            t1 = times["breakout"]
-            path, h = sc.plant_breakout(base, t1)
-            sc.scale_volume(fvol, t1, t1 + sc.BREAKOUT_RUN, 2.5)
-            daily = sc.patch_breakout_daily(daily, h)
+            t1, h = times["breakout"], daily[-1].h
+            path, fvol = _breakout_path(
+                seed, attempt, ticker, open_px, daily_vol, base_volume, t1, h
+            )
             entry |= {"t1_sec": t1, **sc.measure_breakout(path, h, t1)}
-        elif role == "fakeout":
-            t3 = times["fakeout"]
-            path, level = sc.plant_fakeout(base, t3)
-            sc.scale_volume(fvol, t3 - 300, t3 + 300, 1.5)
-            entry |= {"t3_sec": t3, **sc.measure_fakeout(path, level, t3)}
         else:
-            if role == "sharp_drop":
-                base = sc.plant_sharp_drop(base, times["sharp_drop"])
-                sc.scale_volume(
-                    fvol, times["sharp_drop"], times["sharp_drop"] + sc.DROP_WINDOW, 3.0
-                )
-            elif role == "volume_surge":
-                base = sc.plant_flat_hour(base)
-                t4 = times["volume_surge"]
-                sc.scale_volume(fvol, t4, t4 + sc.SURGE_LEN, surge_factor)
-            elif role == "spike":
-                base = sc.plant_spike(base, times["spike"])
-                sc.scale_volume(fvol, times["spike"], times["spike"] + 780, 2.5)
-            path = sc.round_path(base)
-            if role == "gap":
-                entry |= {
-                    "prior_close_cents": prior_close,
-                    "open_cents": path[0],
-                    "gap_pct": sc.pct(path[0], prior_close),
-                }
-                if not 0.03 <= abs(entry["gap_pct"]) <= 0.04:
-                    raise sc.ScenarioError("gap outside 3-4%")
-            elif role == "sharp_drop":
-                entry |= {
-                    "t2_sec": times["sharp_drop"],
-                    **sc.measure_sharp_drop(path, times["sharp_drop"]),
-                }
-            elif role == "volume_surge":
-                entry |= {
-                    "t4_sec": times["volume_surge"],
-                    "t4_end_sec": times["volume_surge"] + sc.SURGE_LEN,
-                }
-            elif role == "spike":
-                entry |= {"start_sec": times["spike"], **sc.measure_spike(path, times["spike"])}
+            base, fvol = gen_intraday(
+                derive_rng(seed, attempt, "path", ticker), open_px, daily_vol, base_volume
+            )
+            if role == "fakeout":
+                t3 = times["fakeout"]
+                path, level = sc.plant_fakeout(base, t3)
+                sc.scale_volume(fvol, t3 - 300, t3 + 300, 1.5)
+                entry |= {"t3_sec": t3, **sc.measure_fakeout(path, level, t3)}
+            else:
+                if role == "sharp_drop":
+                    base = sc.plant_sharp_drop(base, times["sharp_drop"])
+                    sc.scale_volume(
+                        fvol, times["sharp_drop"], times["sharp_drop"] + sc.DROP_WINDOW, 3.0
+                    )
+                elif role == "volume_surge":
+                    base = sc.plant_flat_hour(base)
+                    t4 = times["volume_surge"]
+                    sc.scale_volume(fvol, t4, t4 + sc.SURGE_LEN, surge_factor)
+                elif role == "spike":
+                    base = sc.plant_spike(base, times["spike"])
+                    sc.scale_volume(fvol, times["spike"], times["spike"] + 780, 2.5)
+                path = sc.round_path(base)
+                if role == "gap":
+                    entry |= {
+                        "prior_close_cents": prior_close,
+                        "open_cents": path[0],
+                        "gap_pct": sc.pct(path[0], prior_close),
+                    }
+                    if not 0.03 <= abs(entry["gap_pct"]) <= 0.04:
+                        raise sc.ScenarioError("gap outside 3-4%")
+                elif role == "sharp_drop":
+                    entry |= {
+                        "t2_sec": times["sharp_drop"],
+                        **sc.measure_sharp_drop(path, times["sharp_drop"]),
+                    }
+                elif role == "volume_surge":
+                    entry |= {
+                        "t4_sec": times["volume_surge"],
+                        "t4_end_sec": times["volume_surge"] + sc.SURGE_LEN,
+                    }
+                elif role == "spike":
+                    entry |= {"start_sec": times["spike"], **sc.measure_spike(path, times["spike"])}
         if min(path) <= 0:
             raise sc.ScenarioError("non-positive price")
         if role is not None:
             truth_sc[role] = entry
-        pxs.append(tuple(path))
-        vols.append(tuple(int(v + 0.5) for v in fvol))
+        pxs.append(array("q", path))
+        vols.append(array("q", (int(v + 0.5) for v in fvol)))
         dailies.append(tuple(daily))
+        histories.append(tuple(history))
 
     _validate_uniqueness(roles, tickers, pxs, vols, truth_sc)
     for entry in truth_sc.values():
@@ -152,9 +158,24 @@ def _attempt(seed: int, attempt: int) -> World:
         px=tuple(pxs),
         vol=tuple(vols),
         daily=tuple(dailies),
+        history=tuple(histories),
         default_watchlist=watch,
         truth_json=json.dumps(truth, sort_keys=True, separators=(",", ":")),
     )
+
+
+def _breakout_path(seed, attempt, ticker, open_px, daily_vol, base_volume, t1, h):
+    """Regenerate the breakout ticker's day (seeded sub-attempts) until it fits under H."""
+    for k in range(MAX_BREAKOUT_SUBATTEMPTS):
+        rng = derive_rng(seed, attempt, "path", ticker, "breakout", k)
+        base, fvol = gen_intraday(rng, open_px, daily_vol, base_volume)
+        try:
+            path = sc.plant_breakout(base, t1, h)
+        except sc.ScenarioError:
+            continue
+        sc.scale_volume(fvol, t1, t1 + sc.BREAKOUT_RUN, 2.5)
+        return path, fvol
+    raise sc.ScenarioError("no breakout path fits under the prior-day high")
 
 
 def _validate_uniqueness(roles, tickers, pxs, vols, truth_sc) -> None:
@@ -181,7 +202,7 @@ def _validate_uniqueness(roles, tickers, pxs, vols, truth_sc) -> None:
     }
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=SEED_CACHE)
 def build_world(seed: int) -> World:
     """Deterministic world for `seed`. Retries deterministically if an invariant fails."""
     last_error: Exception | None = None

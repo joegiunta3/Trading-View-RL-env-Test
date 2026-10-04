@@ -23,3 +23,7 @@ world_truth.json
 *.db-shm
 *.sqlite
 *.sqlite3
+
+# Playwright output
+frontend/test-results/
+frontend/playwright-report/

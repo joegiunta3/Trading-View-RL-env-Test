@@ -7,7 +7,7 @@ taken from the intended overlay parameters.
 from collections import deque
 
 from app.timeutil import parse_hhmm
-from app.world.daily import DailyBar, to_cents
+from app.world.daily import to_cents
 
 T_1300 = parse_hhmm("13:00")
 T_1400 = parse_hhmm("14:00")
@@ -51,27 +51,31 @@ def pct(a: int, b: int) -> float:
 # --- overlays -------------------------------------------------------------------------
 
 
-def plant_breakout(base: list[float], t1: int) -> tuple[list[int], int]:
-    """Price stays below H until t1, crosses H exactly at t1, then runs ~+5.5% over 20 min.
+def plant_breakout(base: list[float], t1: int, h: int) -> list[int]:
+    """Stay below the prior-day high H until t1, cross it exactly at t1, then run ~+5.5%.
 
-    Returns (final cents path, H in cents). H becomes the prior-day high.
+    Raises ScenarioError if the morning already trades too close to H; the caller then
+    regenerates this ticker's base path with the next seeded sub-attempt.
     """
     a0 = t1 - BREAKOUT_APPROACH
-    m0 = max(base[:a0])
-    r = m0 * 0.998 / base[t1 - 1]
+    level = h / 100.0
+    if max(base[:a0]) >= level * 0.996:
+        raise ScenarioError("morning trades too close to the prior-day high")
+    r = level * 0.997 / base[t1 - 1]
     f = list(base)
     for s in range(a0, t1):
         w = (s - a0) / BREAKOUT_APPROACH
         f[s] = base[s] * (1.0 + w * (r - 1.0))
     pre = round_path(f[:t1])
-    m = max(pre)
-    h = m + 1
-    c = (m * 1.003 / 100.0) / base[t1]
+    if max(pre) >= h:
+        raise ScenarioError("approach crossed the prior-day high early")
+    first = max(to_cents(level * 1.002), h + 1)
+    c = (first / 100.0) / base[t1]
     post = []
     for s in range(t1, len(base)):
         ramp = min(1.0, (s - t1) / BREAKOUT_RUN)
         post.append(to_cents(base[s] * c * (1.0 + 0.055 * ramp)))
-    return pre + post, h
+    return pre + post
 
 
 def plant_sharp_drop(base: list[float], t2: int) -> list[float]:
@@ -168,16 +172,6 @@ def measure_breakout(path: list[int], h: int, t1: int) -> dict:
     if run_max * 100 < h * 104:
         raise ScenarioError("breakout run < 4%")
     return {"prior_day_high_cents": h, "run_max_cents": run_max, "run_pct": pct(run_max, h)}
-
-
-def patch_breakout_daily(bars: list[DailyBar], h: int) -> list[DailyBar]:
-    """Make the prior day's high exactly H, keeping the bar internally consistent."""
-    last = bars[-1]
-    if last.c >= h:
-        raise ScenarioError("prior close above breakout level")
-    o = min(last.o, h)
-    lo = min(last.l, o, last.c)
-    return bars[:-1] + [DailyBar(last.date, o, h, lo, last.c, last.v)]
 
 
 def measure_sharp_drop(path: list[int], t2: int) -> dict:

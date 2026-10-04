@@ -1,0 +1,13 @@
+# Render Blueprint: a public, always-live demo of the chartview app.
+# The harness/env API is not started in this mode (see app/main.py --public-demo).
+services:
+  - type: web
+    name: chartview-demo
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /api/config
+    autoDeploy: true
+    envVars:
+      - key: DEMO_SEED
+        value: "1234"
