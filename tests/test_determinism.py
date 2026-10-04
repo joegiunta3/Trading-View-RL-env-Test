@@ -82,7 +82,9 @@ def scripted_episode(seed: int) -> str:
     wl = e.create_watchlist("Energy")
     for t in ("XOM", "CVX", "COP"):
         e.add_watchlist_item(wl["id"], t)
-    e.set_chart_prefs("AAPL", "15m", [{"type": "sma", "period": 20}, {"type": "volume"}])
+    e.set_layout("4")
+    e.update_pane(2, "AAPL", "15m", [{"type": "sma", "period": 20}, {"type": "volume"}])
+    e.set_active_pane(3)
     e.advance(3600)
     order(e, "MSFT", "cover", "market", 10)
     e.advance(27000)

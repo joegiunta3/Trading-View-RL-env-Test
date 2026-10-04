@@ -24,7 +24,10 @@ from app.timeutil import cents_to_usd, fmt_hhmmss, parse_hhmm, usd_to_cents
 from app.world.generate import build_world
 from app.world.truth import write_truth
 
-DEFAULT_PREFS = {"timeframe": "5m", "indicators": [{"type": "volume"}]}
+DEFAULT_TIMEFRAME = "5m"
+DEFAULT_INDICATORS = [{"type": "volume"}]
+LAYOUTS = {"1": 1, "2": 2, "3": 3, "4": 4}  # layout id -> visible panes
+PANES = 4
 MAX_SMA_PERIOD = 500
 MAX_INDICATORS = 10
 MAX_NAME_LEN = 40
@@ -132,9 +135,33 @@ class Episode:
             self.conn.execute(
                 "INSERT INTO watchlist_items VALUES (?,?,?)", (cur.lastrowid, self._sid(t), i)
             )
-        self.conn.execute(
-            "INSERT INTO ui_state VALUES ('active_symbol', ?)", (self.world.default_watchlist[0],)
-        )
+        self._init_layout(setup)
+
+    def _init_layout(self, setup: dict) -> None:
+        """Four panes (first four default-watchlist symbols, 5m, volume), layout "1", pane 0 active.
+
+        `setup` may override: {"layout": "4", "active_pane": 2,
+        "panes": [{"pane": 1, "ticker": "NVDA", "timeframe": "15m", "indicators": [...]}]}.
+        """
+        for i, t in enumerate(self.world.default_watchlist[:PANES]):
+            self._write_pane(i, self._sid(t), DEFAULT_TIMEFRAME, DEFAULT_INDICATORS)
+        layout = str(setup.get("layout", "1"))
+        if layout not in LAYOUTS:
+            raise EngineError(f"setup.layout must be one of {', '.join(LAYOUTS)}", 422)
+        self._set_ui("layout", layout)
+        for p in setup.get("panes", []):
+            pane = p.get("pane")
+            if not isinstance(pane, int) or not 0 <= pane < PANES:
+                raise EngineError("setup.panes[].pane must be 0-3", 422)
+            tf = p.get("timeframe", DEFAULT_TIMEFRAME)
+            if tf not in TIMEFRAMES:
+                raise EngineError(f"setup.panes[].timeframe {tf!r} is not valid", 422)
+            inds = self._clean_indicators(p.get("indicators", DEFAULT_INDICATORS))
+            self._write_pane(pane, self._sid(p["ticker"]), tf, inds)
+        active = setup.get("active_pane", 0)
+        if not isinstance(active, int) or not 0 <= active < LAYOUTS[layout]:
+            raise EngineError("setup.active_pane must be a visible pane", 422)
+        self._set_ui("active_pane", str(active))
 
     def _sid(self, ticker: str) -> int:
         sym = self.world.by_ticker.get(str(ticker).strip().upper())
@@ -541,38 +568,113 @@ class Episode:
             raise EngineError(f"Note must be at most {MAX_NOTE_LEN} characters.", 422)
         return note
 
-    # --- chart preferences / UI state ---------------------------------------------------------
+    # --- chart layout and panes ----------------------------------------------------------------
+
+    def _ui(self, key: str) -> str:
+        return self.conn.execute("SELECT value FROM ui_state WHERE key = ?", (key,)).fetchone()[0]
+
+    def _set_ui(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO ui_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+    def _visible_panes(self) -> int:
+        return LAYOUTS[self._ui("layout")]
+
+    def _check_pane(self, pane: int) -> None:
+        visible = self._visible_panes()
+        if not isinstance(pane, int) or isinstance(pane, bool) or not 0 <= pane < visible:
+            raise EngineError(
+                f"Pane {pane} is not shown in the current {visible}-chart layout.", 404
+            )
+
+    def _write_pane(self, pane: int, sid: int, timeframe: str, indicators: list[dict]) -> None:
+        self.conn.execute(
+            "INSERT INTO chart_panes VALUES (?,?,?,?) ON CONFLICT(pane_index) DO UPDATE SET "
+            "symbol_id = excluded.symbol_id, timeframe = excluded.timeframe, "
+            "indicators_json = excluded.indicators_json",
+            (pane, sid, timeframe, json.dumps(indicators, sort_keys=True, separators=(",", ":"))),
+        )
 
     @_locked
-    def get_chart_prefs(self, ticker: str) -> dict:
-        sid = self._sid(ticker)
-        row = self.conn.execute("SELECT * FROM chart_prefs WHERE symbol_id = ?", (sid,)).fetchone()
-        if row is None:
-            return {"ticker": self._ticker(sid), **DEFAULT_PREFS}
+    def get_layout(self) -> dict:
+        """Current layout, active pane, and all four panes' settings (hidden ones are kept)."""
+        rows = self.conn.execute(
+            "SELECT p.*, s.ticker FROM chart_panes p JOIN symbols s ON s.id = p.symbol_id "
+            "ORDER BY p.pane_index"
+        ).fetchall()
         return {
-            "ticker": self._ticker(sid),
-            "timeframe": row["timeframe"],
-            "indicators": json.loads(row["indicators_json"]),
+            "layout": self._ui("layout"),
+            "active_pane": int(self._ui("active_pane")),
+            "panes": [
+                {
+                    "pane": r["pane_index"],
+                    "ticker": r["ticker"],
+                    "timeframe": r["timeframe"],
+                    "indicators": json.loads(r["indicators_json"]),
+                }
+                for r in rows
+            ],
         }
 
     @_locked
-    def set_chart_prefs(self, ticker: str, timeframe: str, indicators: list[dict]) -> dict:
+    def set_layout(self, layout: str) -> dict:
         with self._tx():
             self.sync()
-            sid = self._sid(ticker)
-            if timeframe not in TIMEFRAMES:
-                raise EngineError(f"Unknown timeframe {timeframe!r}.", 422)
-            clean = self._clean_indicators(indicators)
-            self.conn.execute(
-                "INSERT INTO chart_prefs VALUES (?,?,?) ON CONFLICT(symbol_id) DO UPDATE SET "
-                "timeframe = excluded.timeframe, indicators_json = excluded.indicators_json",
-                (sid, timeframe, json.dumps(clean, sort_keys=True, separators=(",", ":"))),
+            if layout not in LAYOUTS:
+                raise EngineError(
+                    f"Unknown layout {layout!r}. Use one of {', '.join(LAYOUTS)}.", 422
+                )
+            self._set_ui("layout", layout)
+            if int(self._ui("active_pane")) >= LAYOUTS[layout]:
+                self._set_ui("active_pane", "0")
+            self._log("PUT /api/layout", {"layout": layout})
+            return self.get_layout()
+
+    @_locked
+    def set_active_pane(self, pane: int) -> dict:
+        with self._tx():
+            self.sync()
+            self._check_pane(pane)
+            self._set_ui("active_pane", str(pane))
+            self._log("PUT /api/layout/active", {"pane": pane})
+            return self.get_layout()
+
+    @_locked
+    def update_pane(
+        self,
+        pane: int,
+        ticker: str | None = None,
+        timeframe: str | None = None,
+        indicators: list[dict] | None = None,
+    ) -> dict:
+        """Change a visible pane's symbol, timeframe and/or indicators."""
+        with self._tx():
+            self.sync()
+            self._check_pane(pane)
+            cur = next(p for p in self.get_layout()["panes"] if p["pane"] == pane)
+            sid = self._sid(ticker if ticker is not None else cur["ticker"])
+            tf = timeframe if timeframe is not None else cur["timeframe"]
+            if tf not in TIMEFRAMES:
+                raise EngineError(
+                    f"Unknown timeframe {tf!r}. Use one of {', '.join(TIMEFRAMES)}.", 422
+                )
+            inds = self._clean_indicators(
+                indicators if indicators is not None else cur["indicators"]
             )
-            self._log(
-                "PUT /api/chart_prefs",
-                {"ticker": self._ticker(sid), "timeframe": timeframe, "indicators": clean},
-            )
-            return self.get_chart_prefs(ticker)
+            self._write_pane(pane, sid, tf, inds)
+            changes = {
+                k: v
+                for k, v in (
+                    ("ticker", self._ticker(sid) if ticker is not None else None),
+                    ("timeframe", timeframe),
+                    ("indicators", inds if indicators is not None else None),
+                )
+                if v is not None
+            }
+            self._log("PUT /api/panes", {"pane": pane, **changes})
+            return self.get_layout()
 
     @staticmethod
     def _clean_indicators(indicators: list[dict]) -> list[dict]:
@@ -595,28 +697,12 @@ class Episode:
                     raise EngineError(
                         f"SMA period must be a whole number from 1 to {MAX_SMA_PERIOD}.", 422
                     )
+                if {"type": "sma", "period": period} in out:
+                    raise EngineError(f"SMA {period} is already on this chart.", 422)
                 out.append({"type": "sma", "period": period})
             else:
                 raise EngineError(f"Unknown indicator {kind!r}. Available: sma, volume.", 422)
         return out
-
-    @_locked
-    def get_ui_state(self) -> dict:
-        rows = self.conn.execute("SELECT key, value FROM ui_state").fetchall()
-        return {r["key"]: r["value"] for r in rows}
-
-    @_locked
-    def set_active_symbol(self, ticker: str) -> dict:
-        with self._tx():
-            self.sync()
-            t = self._ticker(self._sid(ticker))
-            self.conn.execute(
-                "INSERT INTO ui_state VALUES ('active_symbol', ?) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (t,),
-            )
-            self._log("PUT /api/ui_state", {"active_symbol": t})
-            return self.get_ui_state()
 
     # --- harness-only views ---------------------------------------------------------------------
 
@@ -634,7 +720,7 @@ class Episode:
                 "watchlist_items",
                 "alerts",
                 "alert_events",
-                "chart_prefs",
+                "chart_panes",
                 "ui_state",
             ):
                 tables[t] = [dict(r) for r in self.conn.execute(f"SELECT * FROM {t} ORDER BY 1")]

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Maximize2, Minimize2 } from "lucide-react";
+import { createRef, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
+import { Alerts } from "./components/Alerts";
 import { BottomPanel } from "./components/BottomPanel";
 import { type ChartControls, ChartPanel, type RangeRequest } from "./components/ChartPanel";
-import { Alerts } from "./components/Alerts";
 import { LeftRail } from "./components/LeftRail";
 import { OrderTicket, type TicketPrefill } from "./components/OrderTicket";
 import { RangeBar, type RangePreset, rangePresets } from "./components/RangeBar";
@@ -14,7 +15,7 @@ import { Tabs } from "./components/ui";
 import { Watchlists } from "./components/Watchlists";
 import { loadConfig } from "./config";
 import { CONDITION_LABEL, fmtInt, fmtPrice } from "./format";
-import { useLive } from "./live";
+import { type BarSub, useLive } from "./live";
 import type {
   Account,
   Alert,
@@ -23,7 +24,10 @@ import type {
   Bar,
   EngineEvent,
   Indicator,
+  Layout,
+  LayoutId,
   Order,
+  Pane,
   Position,
   Side,
   SymbolInfo,
@@ -32,18 +36,28 @@ import type {
 } from "./types";
 
 type SideTab = "watchlist" | "alerts" | "screener";
-type Prefs = { timeframe: string; indicators: Indicator[] };
+type Series = { key: string; bars: Bar[] };
 
 const TOAST_MS = 6000;
+const PANES = 4;
+const GRID: Record<LayoutId, string> = {
+  "1": "grid-cols-1 grid-rows-1",
+  "2": "grid-cols-2 grid-rows-1",
+  "3": "grid-cols-3 grid-rows-1",
+  "4": "grid-cols-2 grid-rows-2",
+};
+
+const paneKey = (p: Pane) => `${p.ticker}|${p.timeframe}`;
+const emptySeries = (): Series[] => Array.from({ length: PANES }, () => ({ key: "", bars: [] }));
 
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [notReady, setNotReady] = useState(false);
   const [symbols, setSymbols] = useState<SymbolInfo[]>([]);
-  const [active, setActive] = useState("");
-  const [prefs, setPrefs] = useState<Prefs | null>(null);
-  const [series, setSeries] = useState<{ key: string; bars: Bar[] }>({ key: "", bars: [] });
-  const [range, setRange] = useState<RangeRequest | null>(null);
+  const [layout, setLayout] = useState<Layout | null>(null);
+  const [series, setSeries] = useState<Series[]>(emptySeries);
+  const [ranges, setRanges] = useState<(RangeRequest | null)[]>([null, null, null, null]);
+  const [maximized, setMaximized] = useState<number | null>(null);
   const [alertPrefill, setAlertPrefill] = useState<{ ticker: string; price: number; nonce: number } | null>(null);
   const [account, setAccount] = useState<Account | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -56,9 +70,17 @@ export default function App() {
   const [prefill, setPrefill] = useState<TicketPrefill | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>("watchlist");
   const [crosshair, setCrosshair] = useState(true);
-  const controls = useRef<ChartControls | null>(null);
+  const controls = useRef<RefObject<ChartControls | null>[]>(
+    Array.from({ length: PANES }, () => createRef<ChartControls | null>()),
+  );
   const toastId = useRef(0);
-  const barsReq = useRef(0);
+  const barsReq = useRef<number[]>([0, 0, 0, 0]);
+  const requested = useRef<string[]>(["", "", "", ""]);
+
+  const visible = layout ? Number(layout.layout) : 1;
+  const activeIdx = layout?.active_pane ?? 0;
+  const activePane = layout?.panes[activeIdx];
+  const active = activePane?.ticker ?? "";
 
   // --- data loading ----------------------------------------------------------------------
 
@@ -114,8 +136,20 @@ export default function App() {
     [pushToast, refreshAccount, refreshAlerts, refreshOrders],
   );
 
-  const sub = useMemo(() => (active && prefs ? { ticker: active, tf: prefs.timeframe } : null), [active, prefs]);
-  const live = useLive(sub, onEvent);
+  // Live bars for every visible pane (deduplicated).
+  const subs: BarSub[] = useMemo(() => {
+    if (!layout) return [];
+    const seen = new Set<string>();
+    const out: BarSub[] = [];
+    for (const p of layout.panes.slice(0, visible)) {
+      if (!seen.has(paneKey(p))) {
+        seen.add(paneKey(p));
+        out.push({ ticker: p.ticker, tf: p.timeframe });
+      }
+    }
+    return out;
+  }, [layout, visible]);
+  const live = useLive(subs, onEvent);
 
   // Initial load, and again whenever the server starts a new episode.
   useEffect(() => {
@@ -123,11 +157,14 @@ export default function App() {
     let retry: ReturnType<typeof setTimeout> | undefined;
     const load = async () => {
       try {
-        const [cfg, syms, ui] = await Promise.all([loadConfig(), api.symbols(), api.uiState()]);
+        const [cfg, syms, lay] = await Promise.all([loadConfig(), api.symbols(), api.layout()]);
         if (cancelled) return;
         setConfig(cfg);
         setSymbols(syms);
-        setActive(ui.active_symbol ?? syms[0]?.ticker ?? "");
+        requested.current = ["", "", "", ""];
+        setSeries(emptySeries());
+        setMaximized(null);
+        setLayout(lay);
         setNotReady(false);
         await Promise.all([refreshWatchlists(), refreshAlerts()]);
         refreshOrders();
@@ -145,49 +182,51 @@ export default function App() {
     };
   }, [live.epoch, refreshAccount, refreshAlerts, refreshOrders, refreshWatchlists]);
 
-  // Chart preferences for the active symbol.
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    api
-      .chartPrefs(active)
-      .then((p) => !cancelled && setPrefs({ timeframe: p.timeframe, indicators: p.indicators }))
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [active, live.epoch]);
-
-  const loadBars = useCallback((ticker: string, tf: string) => {
-    const req = ++barsReq.current;
+  const loadBars = useCallback((pane: number, ticker: string, tf: string) => {
+    const req = ++barsReq.current[pane];
+    const key = `${ticker}|${tf}`;
+    requested.current[pane] = key;
     api
       .bars(ticker, tf)
-      .then((r) => req === barsReq.current && setSeries({ key: `${ticker}|${tf}`, bars: r.bars }))
-      .catch(() => {});
+      .then((r) => {
+        if (req !== barsReq.current[pane]) return;
+        setSeries((cur) => cur.map((s, i) => (i === pane ? { key, bars: r.bars } : s)));
+      })
+      .catch(() => {
+        requested.current[pane] = "";
+      });
   }, []);
 
+  // Fetch full series whenever a visible pane's symbol or timeframe changes.
+  const visibleKeys = layout ? layout.panes.slice(0, visible).map(paneKey).join(",") : "";
   useEffect(() => {
-    if (active && prefs) loadBars(active, prefs.timeframe);
-  }, [active, prefs?.timeframe, loadBars]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Merge live bar updates into the loaded series; reload if any bar was skipped.
-  useEffect(() => {
-    const lb = live.bars;
-    if (!lb || lb.bars.length === 0) return;
-    const key = `${lb.ticker}|${lb.timeframe}`;
-    setSeries((cur) => {
-      const prev = cur.bars;
-      if (cur.key !== key || prev.length === 0) return cur;
-      const last = prev[prev.length - 1];
-      const incoming = lb.bars.filter((b) => b.time >= last.time);
-      if (incoming.length === 0) return cur;
-      if (lb.bars[0].time > last.time) {
-        loadBars(lb.ticker, lb.timeframe); // missed bars: fetch the full series
-        return cur;
-      }
-      return { key, bars: [...prev.filter((b) => b.time < incoming[0].time), ...incoming] };
+    if (!layout) return;
+    layout.panes.slice(0, visible).forEach((p, i) => {
+      if (requested.current[i] !== paneKey(p)) loadBars(i, p.ticker, p.timeframe);
     });
-  }, [live.bars]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleKeys]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge live bar updates into every pane showing that series; reload a pane if it missed bars.
+  useEffect(() => {
+    if (live.bars.length === 0) return;
+    const byKey = new Map(live.bars.map((lb) => [`${lb.ticker}|${lb.timeframe}`, lb]));
+    // State updaters run later, so a pane that missed bars schedules its own reload.
+    setSeries((cur) =>
+      cur.map((s, i) => {
+        const lb = byKey.get(s.key);
+        if (!lb || lb.bars.length === 0 || s.bars.length === 0) return s;
+        const last = s.bars[s.bars.length - 1];
+        const incoming = lb.bars.filter((b) => b.time >= last.time);
+        if (incoming.length === 0) return s;
+        if (lb.bars[0].time > last.time) {
+          const [ticker, tf] = s.key.split("|");
+          queueMicrotask(() => loadBars(i, ticker, tf));
+          return s;
+        }
+        return { key: s.key, bars: [...s.bars.filter((b) => b.time < incoming[0].time), ...incoming] };
+      }),
+    );
+  }, [live.bars, loadBars]);
 
   // Account values move with prices: refresh whenever sim time advances.
   const simNow = live.clock?.sim_now;
@@ -195,33 +234,61 @@ export default function App() {
     if (simNow != null && config) refreshAccount();
   }, [simNow, config, refreshAccount]);
 
-  // --- actions ---------------------------------------------------------------------------
+  // --- actions (all chart actions target the active pane) ----------------------------------
 
-  const selectSymbol = useCallback((t: string) => {
-    setActive(t);
-    api.setActiveSymbol(t).catch(() => {});
-  }, []);
+  const saveLayout = useCallback(
+    (optimistic: (l: Layout) => Layout, call: () => Promise<Layout>) => {
+      setLayout((l) => (l ? optimistic(l) : l));
+      call()
+        .then(setLayout)
+        .catch((e) => {
+          pushToast({ tone: "error", title: "Could not update the chart", body: e instanceof ApiError ? e.message : "" });
+          api.layout().then(setLayout).catch(() => {});
+        });
+    },
+    [pushToast],
+  );
 
-  const savePrefs = (next: Prefs) => {
-    setPrefs(next);
-    api.saveChartPrefs(active, next.timeframe, next.indicators).catch((e) =>
-      pushToast({ tone: "error", title: "Could not save chart settings", body: e instanceof ApiError ? e.message : "" }),
+  const patchPane = useCallback(
+    (pane: number, changes: { ticker?: string; timeframe?: string; indicators?: Indicator[] }) =>
+      saveLayout(
+        (l) => ({ ...l, panes: l.panes.map((p) => (p.pane === pane ? { ...p, ...changes } : p)) }),
+        () => api.updatePane(pane, changes),
+      ),
+    [saveLayout],
+  );
+
+  const activate = useCallback(
+    (pane: number) => {
+      if (!layout || layout.active_pane === pane) return;
+      saveLayout((l) => ({ ...l, active_pane: pane }), () => api.setActivePane(pane));
+    },
+    [layout, saveLayout],
+  );
+
+  const chooseLayout = (id: LayoutId) => {
+    setMaximized(null);
+    saveLayout(
+      (l) => ({ ...l, layout: id, active_pane: l.active_pane < Number(id) ? l.active_pane : 0 }),
+      () => api.setLayout(id),
     );
   };
 
-  const closePosition = (ticker: string, side: Side, qty?: number) =>
+  const selectSymbol = useCallback((t: string) => patchPane(activeIdx, { ticker: t }), [patchPane, activeIdx]);
+
+  const prefillTicket = (ticker: string, side: Side, qty?: number) =>
     setPrefill((p) => ({ ticker, side, qty, nonce: (p?.nonce ?? 0) + 1 }));
 
   const applyRange = (preset: RangePreset) => {
-    if (!prefs) return;
-    if (preset.tf !== prefs.timeframe) savePrefs({ ...prefs, timeframe: preset.tf });
-    setRange((r) => ({
-      ticker: active,
-      tf: preset.tf,
-      sessions: preset.sessions,
-      fromDate: preset.fromDate,
-      nonce: (r?.nonce ?? 0) + 1,
-    }));
+    if (!activePane) return;
+    if (preset.tf !== activePane.timeframe) patchPane(activeIdx, { timeframe: preset.tf });
+    setRanges((rs) =>
+      rs.map((r, i) =>
+        i === activeIdx
+          ? { ticker: active, tf: preset.tf, sessions: preset.sessions, fromDate: preset.fromDate, nonce: (r?.nonce ?? 0) + 1 }
+          : r,
+      ),
+    );
   };
 
   const openAlert = () => {
@@ -231,7 +298,7 @@ export default function App() {
 
   // --- render ------------------------------------------------------------------------------
 
-  if (!config) {
+  if (!config || !layout || !activePane) {
     return (
       <div className="flex h-full items-center justify-center text-muted" data-testid="loading">
         {notReady ? "Waiting for the environment to start…" : "Loading…"}
@@ -242,7 +309,7 @@ export default function App() {
   const status = live.clock?.market_status;
   const closed = status === "closed";
   const tradingOpen = status === "open";
-  const activeInfo = symbols.find((s) => s.ticker === active);
+  const nameOf = (t: string) => symbols.find((s) => s.ticker === t)?.name ?? "";
 
   return (
     <div className="flex h-full flex-col">
@@ -252,31 +319,71 @@ export default function App() {
         active={active}
         onSymbol={selectSymbol}
         timeframes={config.timeframes}
-        timeframe={prefs?.timeframe ?? ""}
-        onTimeframe={(tf) => prefs && savePrefs({ ...prefs, timeframe: tf })}
-        indicators={prefs?.indicators ?? []}
-        onIndicators={(inds) => prefs && savePrefs({ ...prefs, indicators: inds })}
+        timeframe={activePane.timeframe}
+        onTimeframe={(tf) => patchPane(activeIdx, { timeframe: tf })}
+        indicators={activePane.indicators}
+        onIndicators={(inds) => patchPane(activeIdx, { indicators: inds })}
         clock={live.clock}
         connected={live.connected}
         onAlert={openAlert}
+        layout={layout.layout}
+        onLayout={chooseLayout}
       />
       <div className="flex min-h-0 flex-1">
-        <LeftRail crosshair={crosshair} onCrosshair={setCrosshair} controls={controls} />
+        <LeftRail crosshair={crosshair} onCrosshair={setCrosshair} controls={controls.current[activeIdx]} />
         <main className="flex min-w-0 flex-1 flex-col">
-          <ChartPanel
-            ticker={active}
-            name={activeInfo?.name ?? ""}
-            timeframe={prefs?.timeframe ?? ""}
-            indicators={prefs?.indicators ?? []}
-            bars={series.bars}
-            barsKey={series.key}
-            quote={live.quotes[active]}
-            closed={closed}
-            crosshair={crosshair}
-            controls={controls}
-            range={range}
-            onQuickTrade={(side) => closePosition(active, side)}
-          />
+          <div
+            className={`grid min-h-0 flex-1 gap-px bg-line ${maximized != null ? GRID["1"] : GRID[layout.layout]}`}
+            data-testid="chart-grid"
+            data-layout={layout.layout}
+          >
+            {layout.panes.slice(0, visible).map((p, i) => {
+              const isActive = i === activeIdx;
+              const hidden = maximized != null && maximized !== i;
+              return (
+                <div
+                  key={i}
+                  data-testid={`pane-${i}`}
+                  data-active={isActive}
+                  data-ticker={p.ticker}
+                  data-timeframe={p.timeframe}
+                  onMouseDownCapture={() => activate(i)}
+                  onFocusCapture={() => activate(i)}
+                  className={`relative flex min-h-0 min-w-0 flex-col bg-bg ${hidden ? "hidden" : ""} ${
+                    visible > 1 && isActive ? "outline-2 -outline-offset-2 outline-accent outline" : ""
+                  }`}
+                >
+                  <ChartPanel
+                    ticker={p.ticker}
+                    name={nameOf(p.ticker)}
+                    timeframe={p.timeframe}
+                    indicators={p.indicators}
+                    bars={series[i].key === paneKey(p) ? series[i].bars : []}
+                    barsKey={series[i].key === paneKey(p) ? series[i].key : ""}
+                    quote={live.quotes[p.ticker]}
+                    closed={closed}
+                    crosshair={crosshair}
+                    controls={controls.current[i]}
+                    range={ranges[i]}
+                    onQuickTrade={(side) => prefillTicket(p.ticker, side)}
+                  />
+                  {visible > 1 && (
+                    <button
+                      type="button"
+                      title={maximized === i ? "Restore layout" : "Maximize chart"}
+                      aria-label={maximized === i ? "Restore layout" : "Maximize chart"}
+                      aria-pressed={maximized === i}
+                      data-testid={`pane-maximize-${i}`}
+                      onClick={() => setMaximized((m) => (m === i ? null : i))}
+                      className="absolute top-2 right-[78px] z-20 flex h-6 w-6 items-center justify-center rounded border border-line bg-raised text-muted hover:text-strong"
+                    >
+                      {maximized === i ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
           <RangeBar presets={rangePresets(config.session_date)} onRange={applyRange} clock={live.clock} />
           <BottomPanel
             account={account}
@@ -285,7 +392,7 @@ export default function App() {
             trades={trades}
             tradingOpen={tradingOpen}
             onSymbol={selectSymbol}
-            onClosePosition={closePosition}
+            onClosePosition={prefillTicket}
             reload={() => {
               refreshOrders();
               refreshAccount();
@@ -316,7 +423,10 @@ export default function App() {
             onChange={setSideTab}
             tabs={[
               { id: "watchlist", label: "Watchlist" },
-              { id: "alerts", label: `Alerts${alerts.some((a) => a.status === "active") ? ` (${alerts.filter((a) => a.status === "active").length})` : ""}` },
+              {
+                id: "alerts",
+                label: `Alerts${alerts.some((a) => a.status === "active") ? ` (${alerts.filter((a) => a.status === "active").length})` : ""}`,
+              },
               { id: "screener", label: "Screener" },
             ]}
           />

@@ -25,7 +25,7 @@ test("symbol search switches the chart and persists server-side", async ({ app, 
   await expect(app.getByTestId("symbol-option-MSFT")).toBeVisible();
   await app.getByTestId("symbol-search").press("Enter");
   await expect(app.getByTestId("legend-ticker")).toHaveText("MSFT");
-  await expect.poll(async () => (await (await request.get("/api/ui_state")).json()).active_symbol).toBe("MSFT");
+  await expect.poll(async () => (await (await request.get("/api/layout")).json()).panes[0].ticker).toBe("MSFT");
   await app.reload();
   await expect(app.getByTestId("legend-ticker")).toHaveText("MSFT");
 });
@@ -47,8 +47,8 @@ test("timeframe and SMA settings are saved and computed correctly", async ({ app
   await app.getByTestId("indicators-button").click();
 
   await expect
-    .poll(async () => (await request.get("/api/chart_prefs/XOM")).json())
-    .toEqual({ ticker: "XOM", timeframe: "15m", indicators: [{ type: "volume" }, { type: "sma", period: 20 }] });
+    .poll(async () => (await (await request.get("/api/layout")).json()).panes[0])
+    .toEqual({ pane: 0, ticker: "XOM", timeframe: "15m", indicators: [{ type: "volume" }, { type: "sma", period: 20 }] });
 
   const closes = (await bars(request, "XOM", "15m")).map((b) => b.c);
   const expected = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
@@ -60,12 +60,11 @@ test("timeframe and SMA settings are saved and computed correctly", async ({ app
 });
 
 test("volume can be toggled off", async ({ app, request }) => {
-  const ticker = (await app.getByTestId("legend-ticker").textContent())!;
   await app.getByTestId("indicators-button").click();
   await app.getByTestId("toggle-volume").uncheck();
   await expect(app.getByTestId("legend-vol")).toHaveCount(0);
   await expect
-    .poll(async () => (await (await request.get(`/api/chart_prefs/${ticker}`)).json()).indicators)
+    .poll(async () => (await (await request.get("/api/layout")).json()).panes[0].indicators)
     .toEqual([]);
 });
 

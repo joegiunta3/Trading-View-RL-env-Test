@@ -21,7 +21,7 @@ STATE_TABLES = (
     "watchlist_items",
     "alerts",
     "alert_events",
-    "chart_prefs",
+    "chart_panes",
     "ui_state",
 )
 

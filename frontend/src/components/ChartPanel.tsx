@@ -37,6 +37,9 @@ type Window = { start: number; end: number };
 const VISIBLE_BARS = 150;
 const MIN_SPAN = 10;
 const LABEL_PX = 84; // target spacing between time-axis labels
+// Compact legend (no company name, no Sell/Buy boxes) in narrow or short panes.
+const NARROW_PX = 560;
+const SHORT_PX = 380;
 
 type Props = {
   ticker: string;
@@ -66,6 +69,7 @@ export function ChartPanel(p: Props) {
   barsRef.current = bars;
   const [hover, setHover] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [narrow, setNarrow] = useState(false);
 
   const daily = timeframe === "1D";
   const dailyRef = useRef(daily);
@@ -95,7 +99,10 @@ export function ChartPanel(p: Props) {
       if (el.current) el.current.dataset.window = `${dz.startValue}-${dz.endValue}`;
       c.setOption({ xAxis: [axisLabels(barsRef.current, dailyRef.current, win.current, c.getWidth())] });
     });
-    const ro = new ResizeObserver(() => c.resize());
+    const ro = new ResizeObserver(() => {
+      c.resize();
+      setNarrow(c.getWidth() < NARROW_PX || c.getHeight() < SHORT_PX);
+    });
     ro.observe(el.current);
     const node = el.current;
     const leave = () => setHover(null);
@@ -201,6 +208,7 @@ export function ChartPanel(p: Props) {
         smas={smas}
         showVolume={showVolume}
         daily={daily}
+        narrow={narrow}
         collapsed={collapsed}
         onCollapse={setCollapsed}
       />
@@ -256,6 +264,7 @@ function Legend(
     smas: SmaLine[];
     showVolume: boolean;
     daily: boolean;
+    narrow: boolean;
     collapsed: boolean;
     onCollapse: (v: boolean) => void;
   },
@@ -283,7 +292,7 @@ function Legend(
         <span className="text-[14px] font-semibold text-strong" data-testid="legend-ticker">
           {p.ticker}
         </span>
-        <span className="text-text">{p.name}</span>
+        {!p.narrow && <span className="text-text">{p.name}</span>}
         <span className="text-faint">·</span>
         <span className="text-text" data-testid="legend-timeframe">
           {p.timeframe}
@@ -306,7 +315,7 @@ function Legend(
       </div>
       {!p.collapsed && (
         <>
-          <div className="pointer-events-auto flex items-center gap-2">
+          {!p.narrow && <div className="pointer-events-auto flex items-center gap-2">
             <button
               type="button"
               data-testid="legend-sell"
@@ -330,7 +339,7 @@ function Legend(
               <span className="num text-[13px]">{fmtPrice(q?.ask)}</span>
               <span className="text-[10px] font-semibold tracking-wider">BUY</span>
             </button>
-          </div>
+          </div>}
           {(p.showVolume || p.smas.length > 0) && (
             <div className="flex flex-wrap items-baseline gap-x-3">
               {p.showVolume && bar && item("Vol", fmtInt(bar.v), "legend-vol", "text-text")}

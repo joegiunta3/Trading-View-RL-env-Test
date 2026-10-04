@@ -5,9 +5,10 @@ import type {
   AlertLogEntry,
   AppConfig,
   Bar,
-  ChartPrefs,
   Clock,
   Indicator,
+  Layout,
+  LayoutId,
   Order,
   OrderType,
   Position,
@@ -96,10 +97,9 @@ export const api = {
   ) => request<Alert>("PATCH", `/api/alerts/${id}`, changes),
   deleteAlert: (id: number) => request<{ ok: boolean }>("DELETE", `/api/alerts/${id}`),
 
-  chartPrefs: (ticker: string) => request<ChartPrefs>("GET", `/api/chart_prefs/${enc(ticker)}`),
-  saveChartPrefs: (ticker: string, timeframe: string, indicators: Indicator[]) =>
-    request<ChartPrefs>("PUT", `/api/chart_prefs/${enc(ticker)}`, { timeframe, indicators }),
-  uiState: () => request<{ active_symbol?: string }>("GET", "/api/ui_state"),
-  setActiveSymbol: (ticker: string) =>
-    request<{ active_symbol: string }>("PUT", "/api/ui_state", { active_symbol: ticker }),
+  layout: () => request<Layout>("GET", "/api/layout"),
+  setLayout: (layout: LayoutId) => request<Layout>("PUT", "/api/layout", { layout }),
+  setActivePane: (pane: number) => request<Layout>("PUT", "/api/layout/active", { pane }),
+  updatePane: (pane: number, changes: { ticker?: string; timeframe?: string; indicators?: Indicator[] }) =>
+    request<Layout>("PUT", `/api/panes/${pane}`, changes),
 };

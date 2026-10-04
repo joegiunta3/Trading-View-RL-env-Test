@@ -144,22 +144,13 @@ def test_watchlist_alert_prefs_endpoints(clients):
     assert (
         pub.patch(f"/api/alerts/{a['id']}", json={"enabled": False}).json()["status"] == "disabled"
     )
-    p = pub.put(
-        "/api/chart_prefs/AAPL",
-        json={"timeframe": "15m", "indicators": [{"type": "sma", "period": 20}]},
+    lay = pub.put(
+        "/api/panes/0", json={"timeframe": "15m", "indicators": [{"type": "sma", "period": 20}]}
     )
-    assert p.json() == {
-        "ticker": "AAPL",
-        "timeframe": "15m",
-        "indicators": [{"type": "sma", "period": 20}],
-    }
-    assert (
-        pub.put("/api/chart_prefs/AAPL", json={"timeframe": "2m", "indicators": []}).status_code
-        == 422
-    )
-    assert (
-        pub.put("/api/ui_state", json={"active_symbol": "nvda"}).json()["active_symbol"] == "NVDA"
-    )
+    assert lay.json()["panes"][0]["timeframe"] == "15m"
+    assert lay.json()["panes"][0]["indicators"] == [{"type": "sma", "period": 20}]
+    assert pub.put("/api/panes/0", json={"timeframe": "2m"}).status_code == 422
+    assert pub.put("/api/panes/0", json={"ticker": "nvda"}).json()["panes"][0]["ticker"] == "NVDA"
     s = pub.get(
         "/api/screener", params={"sector": "Energy", "sort": "change_pct", "order": "desc"}
     ).json()
@@ -183,8 +174,7 @@ def all_public_gets(pub) -> dict:
         "/api/watchlists",
         "/api/alerts",
         "/api/alerts/log",
-        "/api/ui_state",
-        "/api/chart_prefs/AAPL",
+        "/api/layout",
         "/api/quotes/AAPL",
     ]:
         r = pub.get(path)
@@ -244,7 +234,7 @@ def test_websocket_frames_are_present_only(clients):
     env.post("/_env/clock/advance", json={"sim_seconds": 600}, headers=H)
     pub.post("/api/orders", json={"ticker": "AAPL", "side": "buy", "type": "market", "qty": 1})
     with pub.websocket_connect("/ws") as ws:
-        ws.send_json({"subscribe": {"ticker": "AAPL", "tf": "1m"}})
+        ws.send_json({"subscribe": [{"ticker": "AAPL", "tf": "1m"}, {"ticker": "XOM", "tf": "1h"}]})
         frames = [ws.receive_json() for _ in range(2)]
     blob = json.dumps(frames).lower()
     for word in FORBIDDEN:

@@ -105,12 +105,13 @@ CREATE TABLE alert_events (
     trigger_price INTEGER NOT NULL,
     sim_ts INTEGER NOT NULL
 );
-CREATE TABLE chart_prefs (
-    symbol_id INTEGER PRIMARY KEY,
+CREATE TABLE chart_panes (           -- the four chart panes; layout decides how many are shown
+    pane_index INTEGER PRIMARY KEY CHECK (pane_index BETWEEN 0 AND 3),
+    symbol_id INTEGER NOT NULL,
     timeframe TEXT NOT NULL,
     indicators_json TEXT NOT NULL
 );
-CREATE TABLE ui_state (
+CREATE TABLE ui_state (             -- keys: layout ("1".."4"), active_pane ("0".."3")
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );

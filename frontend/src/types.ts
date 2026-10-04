@@ -37,7 +37,12 @@ export type Bar = { time: number; date: string; label: string; o: number; h: num
 
 export type Indicator = { type: "volume" } | { type: "sma"; period: number };
 
-export type ChartPrefs = { ticker: string; timeframe: string; indicators: Indicator[] };
+export type LayoutId = "1" | "2" | "3" | "4";
+
+/** One chart pane. All four always exist server-side; the layout decides how many are shown. */
+export type Pane = { pane: number; ticker: string; timeframe: string; indicators: Indicator[] };
+
+export type Layout = { layout: LayoutId; active_pane: number; panes: Pane[] };
 
 export type Side = "buy" | "sell" | "short" | "cover";
 export type OrderType = "market" | "limit" | "stop";

@@ -1,7 +1,8 @@
 import { Activity, AlarmClockPlus, ChevronDown, Plus, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { smaColors } from "../theme";
-import type { Clock, Indicator, SymbolInfo } from "../types";
+import type { Clock, Indicator, LayoutId, SymbolInfo } from "../types";
+import { LayoutMenu } from "./LayoutMenu";
 import { Logo } from "./Logo";
 import { Button, Input } from "./ui";
 
@@ -18,6 +19,8 @@ type Props = {
   clock: Clock | null;
   connected: boolean;
   onAlert: () => void;
+  layout: LayoutId;
+  onLayout: (l: LayoutId) => void;
 };
 
 export function Toolbar(p: Props) {
@@ -49,6 +52,8 @@ export function Toolbar(p: Props) {
         <AlarmClockPlus size={14} /> Alert
       </Button>
       <div className="flex-1" />
+      <LayoutMenu layout={p.layout} onChange={p.onLayout} />
+      <Divider />
       <ClockDisplay clock={p.clock} connected={p.connected} />
     </header>
   );

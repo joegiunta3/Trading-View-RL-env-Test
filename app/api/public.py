@@ -11,7 +11,7 @@ from typing import Literal
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from app.config import APP_NAME, FRONTEND_DIST, SESSION_DATE
@@ -58,13 +58,21 @@ class Indicator(BaseModel):
     period: int | None = None
 
 
-class ChartPrefsIn(BaseModel):
-    timeframe: str
-    indicators: list[Indicator] = Field(default_factory=list)
+class LayoutIn(BaseModel):
+    layout: str
 
 
-class UiStateIn(BaseModel):
-    active_symbol: str
+class ActivePaneIn(BaseModel):
+    pane: int
+
+
+class PaneIn(BaseModel):
+    ticker: str | None = None
+    timeframe: str | None = None
+    indicators: list[Indicator] | None = None
+
+
+MAX_SUBSCRIPTIONS = 4
 
 
 SCREENER_SORT = ("ticker", "last", "change_pct", "volume", "range_pct", "sector")
@@ -211,22 +219,26 @@ def create_public_app(holder: EnvHolder, frontend_dist: Path | None = FRONTEND_D
         ep().delete_alert(alert_id)
         return {"ok": True}
 
-    @app.get("/api/chart_prefs/{ticker}")
-    def get_prefs(ticker: str) -> dict:
-        return ep().get_chart_prefs(ticker)
+    @app.get("/api/layout")
+    def get_layout() -> dict:
+        return ep().get_layout()
 
-    @app.put("/api/chart_prefs/{ticker}")
-    def put_prefs(ticker: str, body: ChartPrefsIn) -> dict:
-        inds = [i.model_dump(exclude_none=True) for i in body.indicators]
-        return ep().set_chart_prefs(ticker, body.timeframe, inds)
+    @app.put("/api/layout")
+    def put_layout(body: LayoutIn) -> dict:
+        return ep().set_layout(body.layout)
 
-    @app.get("/api/ui_state")
-    def get_ui_state() -> dict:
-        return ep().get_ui_state()
+    @app.put("/api/layout/active")
+    def put_active_pane(body: ActivePaneIn) -> dict:
+        return ep().set_active_pane(body.pane)
 
-    @app.put("/api/ui_state")
-    def put_ui_state(body: UiStateIn) -> dict:
-        return ep().set_active_symbol(body.active_symbol)
+    @app.put("/api/panes/{pane}")
+    def put_pane(pane: int, body: PaneIn) -> dict:
+        inds = (
+            None
+            if body.indicators is None
+            else [i.model_dump(exclude_none=True) for i in body.indicators]
+        )
+        return ep().update_pane(pane, body.ticker, body.timeframe, inds)
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket) -> None:
@@ -252,31 +264,33 @@ def mount_frontend(app: FastAPI, dist: Path) -> None:
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
 
-def tick_frame(e: Episode, sub: dict | None) -> dict:
-    """One push frame: clock, all quotes, and the latest bars of the subscribed chart."""
-    frame: dict = {"type": "tick", "clock": e.clock_view(), "quotes": e.quotes()}
-    if sub:
+def tick_frame(e: Episode, subs: list[dict]) -> dict:
+    """One push frame: clock, all quotes, and the newest bars for each subscribed chart."""
+    frame: dict = {"type": "tick", "clock": e.clock_view(), "quotes": e.quotes(), "bars": []}
+    for sub in subs[:MAX_SUBSCRIPTIONS]:
         try:
-            frame["bars"] = {
-                "ticker": sub["ticker"].upper(),
-                "timeframe": sub["tf"],
-                "bars": e.bars(sub["ticker"], sub["tf"], last=2),
-            }
-        except (EngineError, KeyError, AttributeError):
-            frame["bars"] = None
+            frame["bars"].append(
+                {
+                    "ticker": sub["ticker"].upper(),
+                    "timeframe": sub["tf"],
+                    "bars": e.bars(sub["ticker"], sub["tf"], last=2),
+                }
+            )
+        except (EngineError, KeyError, AttributeError, TypeError):
+            continue
     return frame
 
 
 async def stream(socket: WebSocket, holder: EnvHolder, interval: float = 1.0) -> None:
     """Push a tick frame once per real second plus any engine events (fills, alerts...)."""
     await socket.accept()
-    state: dict = {"sub": None}
+    state: dict = {"subs": []}
 
     async def receive() -> None:
         while True:
             msg = await socket.receive_json()
-            if isinstance(msg, dict) and isinstance(msg.get("subscribe"), dict):
-                state["sub"] = msg["subscribe"]
+            if isinstance(msg, dict) and isinstance(msg.get("subscribe"), list):
+                state["subs"] = [s for s in msg["subscribe"] if isinstance(s, dict)]
 
     receiver = asyncio.create_task(receive())
     episode, seq = None, 0
@@ -290,7 +304,7 @@ async def stream(socket: WebSocket, holder: EnvHolder, interval: float = 1.0) ->
                 if episode is not None:
                     await socket.send_json({"type": "reset"})
                 episode, seq = e, 0
-            frame = await run_in_threadpool(tick_frame, e, state["sub"])
+            frame = await run_in_threadpool(tick_frame, e, state["subs"])
             events = e.events_since(seq)
             seq += len(events)
             for ev in events:

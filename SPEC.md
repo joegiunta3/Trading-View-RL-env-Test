@@ -19,7 +19,7 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 - No real accounts, real money, real market data, or real network calls. All prices, volumes and scenarios are synthetic. Ticker symbols and company names are real (names only; see §5).
 - No ads, promos, upsell banners or login walls. The app is a clean workspace.
 - No copying of third-party code, logos, icons, fonts, copy text or images.
-- Not in v0.1: news feed, drawing tools, Pine-style scripting, options, margin, multi-chart layouts, mobile layout.
+- Not in v0.1: news feed, drawing tools, Pine-style scripting, options, margin, mobile layout. (Multi-chart layouts were added in v0.2; see §6.)
 
 ## 2. Visual identity and legal guardrails
 
@@ -67,7 +67,8 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 
 Layout: top toolbar (symbol search, timeframe buttons, indicator menu, clock), left slim toolbar, center chart, right sidebar (watchlist / alerts / screener tabs), bottom panel (Positions, Orders, History, P&L).
 
-1. **Chart.** Candlesticks, volume histogram, timeframes 1m, 5m, 15m, 1h, 1D. Indicators: SMA (user-set period, multiple allowed) and Volume only. A DOM legend shows O/H/L/C, change, volume and SMA values for the hovered (or latest) bar, so lookup tasks can be done by reading text, not just pixels. Crosshair, zoom and pan. Chart preferences (symbol, timeframe, indicators) are saved server-side.
+1. **Chart.** Candlesticks, volume histogram, timeframes 1m, 5m, 15m, 1h, 1D. Indicators: SMA (user-set period, multiple allowed) and Volume only. A DOM legend shows O/H/L/C, change, volume and SMA values for the hovered (or latest) bar, so lookup tasks can be done by reading text, not just pixels. Crosshair, zoom and pan. Chart settings (symbol, timeframe, indicators) are saved server-side per pane.
+   - **Layouts (v0.2):** a "Layout setup" toolbar button offers 1 chart, 2 side by side, 3 columns, or a 2×2 grid. Each pane has its own symbol, timeframe and indicators. Clicking a pane makes it active; the toolbar, watchlist, screener, positions and order ticket act on the active pane. Shrinking a layout hides panes but keeps their settings; any pane can be maximized and restored. No cross-pane sync.
 2. **Clock display.** Visible sim time (HH:MM:SS) and market status in the toolbar.
 3. **Watchlists.** Create, rename, delete watchlists; add/remove tickers; rows show last, change, % change. One default list.
 4. **Screener.** Table of all 20 symbols with filters (price range, % change since prior close, volume, sector) and sortable columns. Values are live.
@@ -99,7 +100,7 @@ Login: auto-signed in as a single seeded account. Seeded starting positions may 
 - `trades(id, order_id, symbol_id, qty, price, sim_ts)`
 - `watchlists(id, name)`; `watchlist_items(watchlist_id, symbol_id, position)`
 - `alerts(id, symbol_id, condition, price, note, enabled, triggered_sim_ts)`
-- `chart_prefs(symbol_id, timeframe, indicators_json)`
+- `chart_panes(pane_index 0-3, symbol_id, timeframe, indicators_json)` and `ui_state(key, value)` with `layout` ("1"-"4") and `active_pane` (v0.2; replaces per-symbol `chart_prefs`)
 - `action_log(id, wall_ts, sim_ts, endpoint, payload)` for grading and trace review (not visible in the UI)
 
 ## 9. Environment API (harness only, not linked from the UI)
