@@ -7,6 +7,7 @@ from app.config import DUPLICATE_ORDER_WINDOW_SEC, SESSION_SECONDS
 from app.engine import account
 from app.engine.errors import EngineError
 from app.market import MarketData
+from app.timeline import fmt_ts, second_of_day
 from app.timeutil import cents_to_usd
 
 SIDES = ("buy", "sell", "short", "cover")
@@ -219,7 +220,7 @@ def process_second(conn: sqlite3.Connection, market: MarketData, s: int) -> list
     """Match resting orders against second s. Order: due stop fills, new stop triggers, limits."""
     events: list[dict] = []
     rows = working_orders(conn)
-    last_second = s == SESSION_SECONDS - 1
+    last_second = second_of_day(s) == SESSION_SECONDS - 1  # a stop can't wait for the next day
     for o in rows:
         if o["type"] == "stop" and o["triggered_sim_ts"] is not None and o["triggered_sim_ts"] < s:
             events.append(fill(conn, market, o, s))
@@ -283,6 +284,10 @@ def order_view(conn: sqlite3.Connection, o: sqlite3.Row) -> dict:
         "filled_sim_ts": o["filled_sim_ts"],
         "fill_price": _usd(o["fill_price"]),
         "closed_sim_ts": o["closed_sim_ts"],
+        "created_time": fmt_ts(o["created_sim_ts"]),
+        "triggered_time": fmt_ts(o["triggered_sim_ts"]),
+        "filled_time": fmt_ts(o["filled_sim_ts"]),
+        "closed_time": fmt_ts(o["closed_sim_ts"]),
         "reason": o["reason"],
         "time_in_force": "day",
     }

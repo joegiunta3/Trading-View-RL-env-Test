@@ -15,12 +15,22 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app.clock import ClockError, ClockMode, ClockState, SimClock
-from app.config import SESSION_DATE, SESSION_SECONDS, START_CASH_CENTS
+from app.config import SESSION_DATES, SESSION_SECONDS, START_CASH_CENTS, TIME_SCALE
 from app.db import new_episode_db, state_hash
 from app.engine import account, alerts, orders
 from app.engine.errors import EngineError
 from app.market import TIMEFRAMES, MarketData, market_for_seed
-from app.timeutil import cents_to_usd, fmt_hhmmss, parse_hhmm, usd_to_cents
+from app.timeline import (
+    DAY_START,
+    DAYS,
+    day_of,
+    fmt_ts,
+    next_open,
+    parse_day_time,
+    phase,
+    second_of_day,
+)
+from app.timeutil import cents_to_usd, fmt_hhmmss, usd_to_cents
 from app.world.generate import build_world
 from app.world.truth import write_truth
 
@@ -65,9 +75,11 @@ class Episode:
         truth_dir: Path | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        start_day: int = 1,
     ):
+        """One two-day episode. The clock starts at `start_time` on `start_day` (1 or 2)."""
         try:
-            start_sec = parse_hhmm(start_time)
+            start_sec = parse_day_time(start_time, start_day)
             self.clock = SimClock(ClockMode(clock_mode), start_sec, monotonic)
         except (ValueError, ClockError) as e:
             raise EngineError(str(e), 422) from e
@@ -81,7 +93,9 @@ class Episode:
         self._wall = wall_clock
         self._events: list[dict] = []
         self._last_processed = start_sec
-        self._close_handled = False
+        self._closed_days: set[int] = {
+            d for d in range(DAYS) if start_sec >= DAY_START[d] + SESSION_SECONDS
+        }
         with self._tx():
             self._init_state(setup or {})
         if truth_dir is not None:
@@ -177,7 +191,13 @@ class Episode:
         if state is ClockState.READY:
             raise EngineError("The market is not open yet.", 409)
         if state is ClockState.CLOSED:
-            raise EngineError("Session closed. Trading has ended for the day.", 409)
+            raise EngineError("Session closed. Trading has ended.", 409)
+        now = self.clock.now
+        if phase(now) == "after_hours":
+            nxt = fmt_ts(next_open(now))
+            raise EngineError(
+                f"The market is closed (after hours). The next session opens {nxt}.", 409
+            )
 
     def _require_not_closed(self) -> None:
         if self.clock.state is ClockState.CLOSED:
@@ -191,28 +211,35 @@ class Episode:
 
     @_locked
     def sync(self) -> int:
-        """Process every elapsed sim second up to now; handle the close. Returns sim_now."""
+        """Process every elapsed trading second up to now, day by day, handling each close.
+
+        Returns sim_now (episode seconds).
+        """
         with self._tx():
             now = self.clock.now
             if self.clock.state is ClockState.READY:
                 return now
-            end = min(now, SESSION_SECONDS - 1)
-            if end > self._last_processed:
-                self._process_range(self._last_processed + 1, end)
-                self._last_processed = end
-            if now >= SESSION_SECONDS and not self._close_handled:
-                self._close_handled = True
-                ids = orders.cancel_all_working(
-                    self.conn, SESSION_SECONDS, "Day order expired at close"
-                )
-                for oid in ids:
-                    self._log("engine:expire", {"order_id": oid}, SESSION_SECONDS)
-                    self._emit(
-                        {"type": "order_cancelled", "order_id": oid, "sim_ts": SESSION_SECONDS}
-                    )
-                self._log("engine:session_closed", {}, SESSION_SECONDS)
-                self._emit({"type": "session_closed", "sim_ts": SESSION_SECONDS})
+            for d in range(DAYS):
+                close_ts = DAY_START[d] + SESSION_SECONDS
+                a = max(self._last_processed + 1, DAY_START[d])
+                b = min(now, close_ts - 1)
+                if a <= b:
+                    self._process_range(a, b)
+                    self._last_processed = b
+                if now >= close_ts and d not in self._closed_days:
+                    self._close_day(d, close_ts)
             return now
+
+    def _close_day(self, d: int, close_ts: int) -> None:
+        """16:30 on episode day d: Day orders expire; positions and cash carry over."""
+        self._closed_days.add(d)
+        final = d == DAYS - 1
+        ids = orders.cancel_all_working(self.conn, close_ts, "Day order expired at close")
+        for oid in ids:
+            self._log("engine:expire", {"order_id": oid}, close_ts)
+            self._emit({"type": "order_cancelled", "order_id": oid, "sim_ts": close_ts})
+        self._log("engine:session_closed", {"day": d + 1, "final": final}, close_ts)
+        self._emit({"type": "session_closed", "day": d + 1, "final": final, "sim_ts": close_ts})
 
     def _process_range(self, a: int, b: int) -> None:
         has_orders = bool(orders.working_orders(self.conn))
@@ -256,17 +283,31 @@ class Episode:
 
     @_locked
     def clock_view(self) -> dict:
+        """Clock for the UI. During the break, `next_open_in` counts down in real seconds."""
         now = self.sync()
         state = self.clock.state
-        status = {"ready": "pre-open", "running": "open", "closed": "closed"}[state.value]
-        return {
+        if state is ClockState.READY:
+            status = "pre-open"
+        elif state is ClockState.CLOSED:
+            status = "closed"
+        else:
+            status = "open" if phase(now) == "open" else "after-hours"
+        d = day_of(now)
+        view = {
             "sim_now": now,
-            "time": fmt_hhmmss(now),
-            "date": SESSION_DATE,
+            "day": d + 1,
+            "days": DAYS,
+            "date": SESSION_DATES[d],
+            "time": fmt_hhmmss(second_of_day(now)),
             "market_status": status,
             "session_open": "09:00:00",
             "session_close": "16:30:00",
         }
+        if status == "after-hours":
+            nxt = next_open(now)
+            view["next_open"] = fmt_ts(nxt)
+            view["next_open_in"] = -(-(nxt - now) // TIME_SCALE)  # real seconds, rounded up
+        return view
 
     @_locked
     def events_since(self, seq: int) -> list[dict]:
@@ -332,7 +373,7 @@ class Episode:
                 "price": cents_to_usd(r["price"]),
                 "realized_pnl": cents_to_usd(r["realized_pnl"]),
                 "sim_ts": r["sim_ts"],
-                "time": fmt_hhmmss(r["sim_ts"]),
+                "time": fmt_ts(r["sim_ts"]),
             }
             for r in rows
         ]
@@ -515,7 +556,7 @@ class Episode:
                 "price": cents_to_usd(r["price"]),
                 "trigger_price": cents_to_usd(r["trigger_price"]),
                 "sim_ts": r["sim_ts"],
-                "time": fmt_hhmmss(r["sim_ts"]),
+                "time": fmt_ts(r["sim_ts"]),
             }
             for r in rows
         ]
@@ -728,7 +769,7 @@ class Episode:
                 "episode_id": self.episode_id,
                 "seed": self.seed,
                 "sim_now": now,
-                "time": fmt_hhmmss(now),
+                "time": fmt_ts(now),
                 "clock_mode": self.clock.mode.value,
                 "clock_state": self.clock.state.value,
                 "state_hash": state_hash(self.conn),

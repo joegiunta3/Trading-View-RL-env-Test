@@ -1,5 +1,6 @@
 import { Activity, AlarmClockPlus, ChevronDown, Plus, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { marketStatus } from "../format";
 import { smaColors } from "../theme";
 import type { Clock, Indicator, LayoutId, SymbolInfo } from "../types";
 import { LayoutMenu } from "./LayoutMenu";
@@ -246,9 +247,7 @@ function IndicatorMenu({ indicators, onChange }: { indicators: Indicator[]; onCh
 }
 
 function ClockDisplay({ clock, connected }: { clock: Clock | null; connected: boolean }) {
-  const status = clock?.market_status;
-  const label = status === "open" ? "Market open" : status === "closed" ? "Session closed" : "Pre-open";
-  const dot = status === "open" ? "bg-up" : status === "closed" ? "bg-down" : "bg-warn";
+  const { label, dot } = marketStatus(clock);
   return (
     <div className="flex items-center gap-3" data-testid="clock">
       {!connected && <span className="text-[11px] text-warn">Reconnecting…</span>}
@@ -263,7 +262,9 @@ function ClockDisplay({ clock, connected }: { clock: Clock | null; connected: bo
         <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
         {label}
       </span>
-      <span className="text-[11px] text-faint">{clock?.date ?? ""}</span>
+      <span className="text-[11px] text-faint" data-testid="clock-date">
+        {clock ? `Day ${clock.day} of ${clock.days} · ${clock.date}` : ""}
+      </span>
       <span className="num rounded bg-bg px-2 py-1 text-[13px] text-strong" data-testid="clock-time">
         {clock?.time ?? "--:--:--"}
       </span>

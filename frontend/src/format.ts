@@ -9,12 +9,27 @@ export const fmtSigned = (n: number): string => `${n > 0 ? "+" : ""}${money.form
 export const fmtPct = (n: number): string => `${n > 0 ? "+" : ""}${n.toFixed(2)}%`;
 export const fmtInt = (n: number | null | undefined): string => (n == null ? "—" : integer.format(n));
 
-/** Sim seconds since 09:00:00 -> HH:MM:SS (pure arithmetic; never reads a clock). */
-export function simTime(simSec: number | null | undefined): string {
-  if (simSec == null) return "—";
-  const t = simSec + 9 * 3600;
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return `${pad(Math.floor(t / 3600))}:${pad(Math.floor((t % 3600) / 60))}:${pad(t % 60)}`;
+/** m:ss for a countdown in real seconds. */
+export const fmtCountdown = (s: number): string => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+
+/** Label and status-dot class for the market state shown in the UI. */
+export function marketStatus(clock: { market_status: string; next_open_in?: number } | null): {
+  label: string;
+  dot: string;
+} {
+  switch (clock?.market_status) {
+    case "open":
+      return { label: "Market open", dot: "bg-up" };
+    case "after-hours":
+      return {
+        label: `After hours · opens in ${fmtCountdown(clock.next_open_in ?? 0)}`,
+        dot: "bg-warn",
+      };
+    case "closed":
+      return { label: "Session closed", dot: "bg-down" };
+    default:
+      return { label: "Pre-open", dot: "bg-warn" };
+  }
 }
 
 export const toneClass = (n: number): string => (n > 0 ? "text-up" : n < 0 ? "text-down" : "text-muted");

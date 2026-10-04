@@ -4,6 +4,7 @@ import sqlite3
 
 from app.engine.errors import EngineError
 from app.market import MarketData
+from app.timeline import fmt_ts
 from app.timeutil import cents_to_usd
 
 CONDITIONS = ("above", "below", "crossing_up", "crossing_down")
@@ -123,6 +124,8 @@ def alert_view(conn: sqlite3.Connection, a: sqlite3.Row) -> dict:
         "enabled": bool(a["enabled"]),
         "created_sim_ts": a["created_sim_ts"],
         "triggered_sim_ts": a["triggered_sim_ts"],
+        "created_time": fmt_ts(a["created_sim_ts"]),
+        "triggered_time": fmt_ts(a["triggered_sim_ts"]),
         "status": "triggered"
         if a["triggered_sim_ts"] is not None
         else ("active" if a["enabled"] else "disabled"),

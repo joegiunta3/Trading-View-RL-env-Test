@@ -14,7 +14,7 @@ import { Toolbar } from "./components/Toolbar";
 import { Tabs } from "./components/ui";
 import { Watchlists } from "./components/Watchlists";
 import { loadConfig } from "./config";
-import { CONDITION_LABEL, fmtInt, fmtPrice } from "./format";
+import { CONDITION_LABEL, fmtCountdown, fmtInt, fmtPrice } from "./format";
 import { type BarSub, useLive } from "./live";
 import type {
   Account,
@@ -128,7 +128,15 @@ export default function App() {
         });
         refreshAlerts().catch(() => {});
       } else if (e.type === "session_closed") {
-        pushToast({ tone: "info", title: "Session closed", body: "Working orders were cancelled." });
+        pushToast(
+          e.final
+            ? { tone: "info", title: "Session closed", body: "The final trading day has ended." }
+            : {
+                tone: "info",
+                title: `Day ${e.day} closed`,
+                body: "Day orders were cancelled. Positions carry over to the next session.",
+              },
+        );
       }
       refreshOrders();
       refreshAccount();
@@ -308,6 +316,15 @@ export default function App() {
 
   const status = live.clock?.market_status;
   const closed = status === "closed";
+  const overlay =
+    status === "after-hours"
+      ? {
+          title: `After hours · next session opens in ${fmtCountdown(live.clock?.next_open_in ?? 0)}`,
+          body: `Day ${live.clock?.day} has closed. Trading resumes ${live.clock?.next_open ?? ""}.`,
+        }
+      : closed
+        ? { title: "Session closed", body: "The final trading day has ended. Working orders were cancelled." }
+        : null;
   const tradingOpen = status === "open";
   const nameOf = (t: string) => symbols.find((s) => s.ticker === t)?.name ?? "";
 
@@ -361,7 +378,8 @@ export default function App() {
                     bars={series[i].key === paneKey(p) ? series[i].bars : []}
                     barsKey={series[i].key === paneKey(p) ? series[i].key : ""}
                     quote={live.quotes[p.ticker]}
-                    closed={closed}
+                    closed={closed || status === "after-hours"}
+                    overlay={i === activeIdx || maximized === i || visible === 1 ? overlay : null}
                     crosshair={crosshair}
                     controls={controls.current[i]}
                     range={ranges[i]}

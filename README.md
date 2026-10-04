@@ -1,8 +1,8 @@
 # chartview RL environment
 
-A deterministic, resettable dark-mode charting and paper-trading web app with a simulated trading
-day (09:00–16:30, 1 real second = 6 sim seconds), built for training and evaluating browser-use
-agents. See `SPEC.md` for the full design and `CLAUDE.md` for working rules.
+A deterministic, resettable dark-mode charting and paper-trading web app with **two simulated
+trading days** (each 09:00–16:30, 1 real second = 6 sim seconds, with a 45-second after-hours break
+between them), built for training and evaluating browser-use agents. See `SPEC.md` for the full design and `CLAUDE.md` for working rules.
 
 **All market data is simulated.** Ticker symbols and company names are real for realism only;
 prices, volumes, history and events are generated from a seed and are not real quotes.
@@ -26,7 +26,9 @@ every 10 real seconds.
 | 5m | 50 s |
 | 15m | 2.5 min |
 | 1h | 10 min |
-| 1D | 75 min (the whole session) |
+| 1D | 75 min (one whole session) |
+
+A full episode (day 1, the 45 s break, day 2) takes about 2.5 real hours.
 
 ## Ports
 

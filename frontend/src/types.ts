@@ -5,15 +5,21 @@ export type AppConfig = {
   sectors: string[];
 };
 
-export type MarketStatus = "pre-open" | "open" | "closed";
+export type MarketStatus = "pre-open" | "open" | "after-hours" | "closed";
 
+/** Server clock. `sim_now` is episode seconds; `time` is HH:MM:SS within `day` (1 or 2). */
 export type Clock = {
   sim_now: number;
+  day: number;
+  days: number;
   time: string;
   date: string;
   market_status: MarketStatus;
   session_open: string;
   session_close: string;
+  /** Only during the after-hours break. */
+  next_open?: string;
+  next_open_in?: number;
 };
 
 export type SymbolInfo = { ticker: string; name: string; sector: string };
@@ -61,6 +67,10 @@ export type Order = {
   filled_sim_ts: number | null;
   fill_price: number | null;
   closed_sim_ts: number | null;
+  created_time: string;
+  triggered_time: string | null;
+  filled_time: string | null;
+  closed_time: string | null;
   reason: string | null;
   time_in_force: string;
 };
@@ -113,6 +123,8 @@ export type Alert = {
   enabled: boolean;
   created_sim_ts: number;
   triggered_sim_ts: number | null;
+  created_time: string;
+  triggered_time: string | null;
   status: "active" | "disabled" | "triggered";
 };
 

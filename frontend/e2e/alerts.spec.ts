@@ -49,8 +49,8 @@ test("a triggered alert shows a toast and appears in the log with its sim time",
   await expect(app.getByTestId("alert-list")).toContainText("KO");
   await env.advance(30);
   await expect(app.getByTestId("toast-alert")).toContainText("Alert: KO Above 1.00");
-  await expect(app.getByTestId("alert-log")).toContainText("09:00:01");
-  await expect(app.getByTestId("alert-list")).toContainText("Triggered 09:00:01");
+  await expect(app.getByTestId("alert-log")).toContainText("Jan 15 09:00:01");
+  await expect(app.getByTestId("alert-list")).toContainText("Triggered Jan 15 09:00:01");
 });
 
 test("toolbar Alert button opens the form prefilled with the active symbol and price", async ({ app, request }) => {

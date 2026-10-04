@@ -8,12 +8,13 @@ CREATE TABLE symbols (
     sector TEXT NOT NULL,
     spread INTEGER NOT NULL
 );
-CREATE TABLE path (
+CREATE TABLE path (                  -- the episode's two trading days at 1-second resolution
     symbol_id INTEGER NOT NULL,
-    sim_sec INTEGER NOT NULL,
+    day INTEGER NOT NULL,            -- 1 or 2
+    sim_sec INTEGER NOT NULL,        -- seconds since 09:00 on that day (0..26999)
     price INTEGER NOT NULL,
     volume INTEGER NOT NULL,
-    PRIMARY KEY (symbol_id, sim_sec)
+    PRIMARY KEY (symbol_id, day, sim_sec)
 ) WITHOUT ROWID;
 CREATE TABLE intraday_bars (     -- prior sessions at 1-minute resolution
     symbol_id INTEGER NOT NULL,
@@ -118,7 +119,7 @@ CREATE TABLE ui_state (             -- keys: layout ("1".."4"), active_pane ("0"
 CREATE TABLE action_log (
     id INTEGER PRIMARY KEY,
     wall_ts REAL NOT NULL,           -- real time; never used for grading or hashing
-    sim_ts INTEGER NOT NULL,
+    sim_ts INTEGER NOT NULL,         -- episode seconds (see app/timeline.py)
     endpoint TEXT NOT NULL,
     payload TEXT NOT NULL
 );

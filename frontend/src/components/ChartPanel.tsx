@@ -51,6 +51,8 @@ type Props = {
   barsKey: string;
   quote: Quote | undefined;
   closed: boolean;
+  /** Message over the chart (after-hours break, end of episode), or null. */
+  overlay: { title: string; body: string } | null;
   crosshair: boolean;
   controls: MutableRefObject<ChartControls | null>;
   range: RangeRequest | null;
@@ -214,16 +216,14 @@ export function ChartPanel(p: Props) {
       />
       <div ref={el} className="min-h-0 flex-1" data-testid="chart-canvas" />
       <ChartNav controls={p.controls} />
-      {p.closed && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+      {p.overlay && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
           <div
-            data-testid="session-closed"
+            data-testid="chart-overlay"
             className="rounded-md border border-line-strong bg-overlay px-5 py-3 text-center backdrop-blur-sm"
           >
-            <div className="text-[15px] font-semibold text-strong">Session closed</div>
-            <div className="mt-0.5 text-[12px] text-muted">
-              Trading has ended for the day. Working orders were cancelled.
-            </div>
+            <div className="text-[15px] font-semibold text-strong">{p.overlay.title}</div>
+            <div className="mt-0.5 text-[12px] text-muted">{p.overlay.body}</div>
           </div>
         </div>
       )}

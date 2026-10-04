@@ -1,13 +1,11 @@
-import { fmtInt, fmtPct, fmtPrice, fmtSigned, toneClass } from "../format";
+import { fmtInt, fmtPct, fmtPrice, fmtSigned, marketStatus, toneClass } from "../format";
 import type { Clock, Quote } from "../types";
 import { Badge } from "./Watchlists";
 
 /** Details for the active symbol, shown under the watchlist. All values are live. */
 export function SymbolDetails({ quote, clock }: { quote: Quote | undefined; clock: Clock | null }) {
   if (!quote) return null;
-  const status = clock?.market_status;
-  const statusLabel = status === "open" ? "Market open" : status === "closed" ? "Session closed" : "Pre-open";
-  const dot = status === "open" ? "bg-up" : status === "closed" ? "bg-down" : "bg-warn";
+  const { label: statusLabel, dot } = marketStatus(clock);
   const stats: [string, string, string?][] = [
     ["Open", fmtPrice(quote.open)],
     ["Prev close", fmtPrice(quote.prev_close)],

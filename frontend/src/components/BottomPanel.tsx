@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { ApiError, api } from "../api";
-import { fmtInt, fmtPrice, fmtSignedUsd, fmtUsd, simTime, toneClass } from "../format";
+import { fmtInt, fmtPrice, fmtSignedUsd, fmtUsd, toneClass } from "../format";
 import type { Account, Order, Position, Side, Trade } from "../types";
 import { Empty, ErrorText, Tabs, td, th } from "./ui";
 
@@ -184,7 +184,7 @@ function Orders({
         {orders.map((o) => (
           <tr key={o.id} data-testid={`order-row-${o.id}`} className="border-b border-line/50 hover:bg-hover">
             <td className={`${td} num text-faint`}>{o.id}</td>
-            <td className={`${td} num text-muted`}>{simTime(o.created_sim_ts)}</td>
+            <td className={`${td} num text-muted`}>{o.created_time}</td>
             <td className={`${td} font-semibold text-strong`}>{o.ticker}</td>
             <td className={`${td} capitalize ${o.side === "buy" || o.side === "cover" ? "text-up" : "text-down"}`}>{o.side}</td>
             <td className={`${td} capitalize`}>{o.type}</td>
@@ -195,7 +195,7 @@ function Orders({
               {o.status === "working" && o.triggered_sim_ts != null ? " (triggered)" : ""}
             </td>
             <td className={`${td} num text-right`}>
-              {o.fill_price != null ? `${fmtPrice(o.fill_price)} @ ${simTime(o.filled_sim_ts)}` : "—"}
+              {o.fill_price != null ? `${fmtPrice(o.fill_price)} @ ${o.filled_time}` : "—"}
             </td>
             <td className={`${td} max-w-72 truncate text-[11px] text-muted`} title={o.reason ?? ""}>
               {o.reason ?? ""}

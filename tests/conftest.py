@@ -9,9 +9,15 @@ SEED = 1234
 
 
 def make_episode(
-    seed: int = SEED, start_time: str = "09:00", setup: dict | None = None, start: bool = True
+    seed: int = SEED,
+    start_time: str = "09:00",
+    setup: dict | None = None,
+    start: bool = True,
+    start_day: int = 1,
 ) -> Episode:
-    e = Episode(seed, start_time=start_time, clock_mode="fixed-step", setup=setup)
+    e = Episode(
+        seed, start_time=start_time, clock_mode="fixed-step", setup=setup, start_day=start_day
+    )
     if start:
         e.start()
     return e

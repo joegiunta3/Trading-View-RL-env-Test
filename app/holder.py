@@ -1,5 +1,6 @@
 """Holds the single live Episode shared by the public and env apps."""
 
+import gc
 import os
 import secrets
 import threading
@@ -19,14 +20,22 @@ class EnvHolder:
         self._episode_kwargs = episode_kwargs
         self._lock = threading.Lock()
 
-    def reset(self, seed: int, start_time: str, clock_mode: str, setup: dict | None) -> Episode:
+    def reset(
+        self, seed: int, start_time: str, clock_mode: str, setup: dict | None, start_day: int = 1
+    ) -> Episode:
         with self._lock:
             kwargs = dict(self._episode_kwargs)
             if self.data_dir is not None:
                 self.data_dir.mkdir(parents=True, exist_ok=True)
                 kwargs.setdefault("db_path", self.data_dir / "chartview.db")
                 kwargs.setdefault("truth_dir", self.data_dir / "episodes")
-            if self.episode is not None:
-                self.episode.conn.close()
-            self.episode = Episode(seed, start_time, clock_mode, setup, **kwargs)
+            old, self.episode = self.episode, None
+            if old is not None:  # free the old world before building the next one
+                with old.lock:
+                    old.conn.close()
+                del old
+                gc.collect()
+            self.episode = Episode(
+                seed, start_time, clock_mode, setup, start_day=start_day, **kwargs
+            )
             return self.episode

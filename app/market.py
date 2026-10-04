@@ -1,26 +1,28 @@
-"""Read-only market views of the world, always truncated at the current sim second.
+"""Read-only market views of the world, always truncated at the current episode second.
 
-Nothing here can return data for a second later than `t`.
+Nothing here can return data for a second later than `t`: during the after-hours break and
+before day 2 opens, day 2 is invisible (see app/timeline.py).
 """
 
 from array import array
 from functools import lru_cache
 
-from app.config import SEED_CACHE, SESSION_DATE, SESSION_SECONDS
-from app.timeutil import cents_to_usd, date_epoch, fmt_hhmmss, sim_epoch
+from app.config import SEED_CACHE, SESSION_DATES, SESSION_SECONDS
+from app.timeline import DAYS, day_of, second_of_day, trade_index
+from app.timeutil import cents_to_usd, date_epoch, fmt_hhmmss
 from app.world.generate import World, build_world
 
 TIMEFRAMES: dict[str, int | None] = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1D": None}
-# Prior sessions shown before today on each intraday timeframe (all bars are in the past).
+# Prior sessions shown before the episode's days on each intraday timeframe.
 HISTORY_SESSIONS = {"1m": 5, "5m": 20, "15m": 60, "1h": 60}
 OPEN_OFFSET = 9 * 3600  # 09:00 in seconds after midnight
 
 Agg = tuple[int, int, int, int, int]  # o, h, l, c, v
 
 
-def last_idx(t: int) -> int:
-    """Index of the latest revealed path second at sim time t."""
-    return min(t, SESSION_SECONDS - 1)
+def revealed(t: int) -> tuple[int, int]:
+    """(0-based day, last revealed second of that day) at episode second t."""
+    return day_of(t), min(second_of_day(t), SESSION_SECONDS - 1)
 
 
 def _combine(parts: list[Agg]) -> Agg:
@@ -66,7 +68,15 @@ class SymbolSeries:
 class MarketData:
     def __init__(self, world: World):
         self.world = world
-        self.series = [SymbolSeries(world.px[i], world.vol[i]) for i in range(len(world.symbols))]
+        n = SESSION_SECONDS
+        # series[symbol index][day]: per-day running stats and minute aggregates
+        self.series = [
+            [
+                SymbolSeries(world.px[i][d * n : (d + 1) * n], world.vol[i][d * n : (d + 1) * n])
+                for d in range(DAYS)
+            ]
+            for i in range(len(world.symbols))
+        ]
 
     def history_bars(self, sid: int, tf: str) -> list[dict]:
         """Completed bars of prior sessions for an intraday timeframe (computed per call)."""
@@ -81,21 +91,24 @@ class MarketData:
         return out
 
     def price(self, sid: int, t: int) -> int:
-        return self.series[sid - 1].px[last_idx(t)]
+        return self.world.px[sid - 1][trade_index(t)]
 
-    def bid_ask(self, sid: int, s: int) -> tuple[int, int]:
-        p = self.series[sid - 1].px[last_idx(s)]
+    def bid_ask(self, sid: int, t: int) -> tuple[int, int]:
+        p = self.world.px[sid - 1][trade_index(t)]
         spread = self.world.symbols[sid - 1].spread
         bid = p - spread // 2
         return bid, bid + spread
 
-    def prev_close(self, sid: int) -> int:
-        return self.world.daily[sid - 1][-1].c
+    def prev_close(self, sid: int, day: int) -> int:
+        """Close of the session before episode day `day` (0-based)."""
+        if day == 0:
+            return self.world.daily[sid - 1][-1].c
+        return self.series[sid - 1][day - 1].px[SESSION_SECONDS - 1]
 
     def quote(self, sid: int, t: int) -> dict:
-        ser = self.series[sid - 1]
-        i = last_idx(t)
-        last, prev = ser.px[i], self.prev_close(sid)
+        d, i = revealed(t)
+        ser = self.series[sid - 1][d]
+        last, prev = ser.px[i], self.prev_close(sid, d)
         bid, ask = self.bid_ask(sid, t)
         sym = self.world.symbols[sid - 1]
         return {
@@ -115,37 +128,48 @@ class MarketData:
             "range_pct": round((ser.run_hi[i] - ser.run_lo[i]) / ser.px[0] * 100, 2),
         }
 
+    def _day_bars(
+        self, sid: int, day: int, width: int, upto: int, last: int | None = None
+    ) -> list[dict]:
+        """Bars of one episode day up to second `upto` (inclusive)."""
+        ser = self.series[sid - 1][day]
+        date = SESSION_DATES[day]
+        base = date_epoch(date) + OPEN_OFFSET
+        starts = range(0, upto + 1, width)
+        if last is not None:
+            starts = starts[-last:]
+        return [
+            _bar(base + a, date, fmt_hhmmss(a)[:5], ser.agg(a, min(a + width - 1, upto)))
+            for a in starts
+        ]
+
+    def _day_daily(self, sid: int, day: int, upto: int) -> dict:
+        date = SESSION_DATES[day]
+        return _bar(date_epoch(date), date, date, self.series[sid - 1][day].agg(0, upto))
+
     def bars(self, sid: int, tf: str, t: int, last: int | None = None) -> list[dict]:
         """All bars up to t, or only the newest `last` bars (cheap; used for live pushes)."""
         if tf not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {tf!r}")
-        ser = self.series[sid - 1]
-        i = last_idx(t)
+        d, i = revealed(t)
         width = TIMEFRAMES[tf]
         if width is None:
-            if last is not None:
-                prior = self.world.daily[sid - 1][-(last - 1) :] if last > 1 else []
-                return [
-                    _bar(date_epoch(b.date), b.date, b.date, (b.o, b.h, b.l, b.c, b.v))
-                    for b in prior
-                ] + [_bar(date_epoch(SESSION_DATE), SESSION_DATE, SESSION_DATE, ser.agg(0, i))]
             out = [
                 _bar(date_epoch(b.date), b.date, b.date, (b.o, b.h, b.l, b.c, b.v))
                 for b in self.world.daily[sid - 1]
             ]
-            out.append(_bar(date_epoch(SESSION_DATE), SESSION_DATE, SESSION_DATE, ser.agg(0, i)))
-            return out
-        starts = range(0, i + 1, width)
+            out += [self._day_daily(sid, k, SESSION_SECONDS - 1) for k in range(d)]
+            out.append(self._day_daily(sid, d, i))
+            return out[-last:] if last is not None else out
         if last is not None:
-            starts = starts[-last:]
-        today = [
-            _bar(sim_epoch(a), SESSION_DATE, fmt_hhmmss(a)[:5], ser.agg(a, min(a + width - 1, i)))
-            for a in starts
-        ]
-        if last is not None and len(today) >= last:
-            return today  # live pushes only need the newest bars
-        history = self.history_bars(sid, tf)
-        return (history + today)[-last:] if last is not None else history + today
+            today = self._day_bars(sid, d, width, i, last)
+            if len(today) >= last:
+                return today  # live pushes only need the newest bars
+        out = self.history_bars(sid, tf)
+        for k in range(d):
+            out += self._day_bars(sid, k, width, SESSION_SECONDS - 1)
+        out += self._day_bars(sid, d, width, i)
+        return out[-last:] if last is not None else out
 
 
 def _bar(time: int, date: str, label: str, agg: Agg) -> dict:

@@ -127,7 +127,7 @@ Do you want any sync toggles? *(proposed: none in the first version; add "sync c
 
 ---
 
-## 3A. Second trading day (NOT YET APPROVED)
+## 3A. Second trading day: **APPROVED AND BUILT** (merged into SPEC.md §4/§8)
 
 Owner wants at least one more trading day. Proposal:
 
@@ -150,8 +150,9 @@ Owner wants at least one more trading day. Proposal:
 - **Planted scenarios** spread across both days (and the overnight gap), recorded in world_truth with
   day indexes. Golden hashes are regenerated (intentional change).
 
-**[Q7]** Option A (immediate) or B (after-hours break)? And should the episode length be fixed at 2
-days, or chosen per task (1 or 2)? *(proposed: B with 45 s; per-task choice of 1 or 2 days)*
+**[Q7] Decided (owner, 2026-10-04):** option **B, a short after-hours break** between days, and
+episodes are **always 2 days**. Break length proposed at 45 real seconds. **Build not yet started:
+waiting for the go-ahead.**
 
 ---
 
@@ -204,4 +205,4 @@ Each needs your approval before it's built. Items marked ⚠ reverse a v0.1 non-
 - **[Q4]** Replace per-symbol chart prefs with per-pane prefs?
 - **[Q5]** News content with real tickers: fictional events plus marker, or sector-level only?
 - **[Q6]** Feature order after multi-chart. (Owner: decide after multi-chart is built.)
-- **[Q7]** Second trading day: immediate vs after-hours break; fixed 2 days vs per-task 1–2.
+- **[Q7]** Decided: short after-hours break; always 2 days.

@@ -5,11 +5,14 @@ from pathlib import Path
 
 APP_NAME = "chartview"
 
-# Simulated session: 09:00:00 to 16:30:00 on a fixed date.
-SESSION_DATE = "2026-01-15"
+# Every episode is two simulated trading days, each 09:00:00 to 16:30:00, separated by a
+# short after-hours break. See app/timeline.py for the episode-second timeline.
+SESSION_DATES = ("2026-01-15", "2026-01-16")
+SESSION_DATE = SESSION_DATES[0]  # first day; history covers the sessions before it
 SESSION_OPEN_HHMMSS = "09:00:00"
-SESSION_SECONDS = 27_000  # sim seconds 0..26999 are tradable; 27000 is the close
+SESSION_SECONDS = 27_000  # per day: seconds 0..26999 are tradable; 27000 is the close
 TIME_SCALE = 6  # sim seconds per real second
+BREAK_SECONDS = 270  # after-hours break between days, in sim seconds (= 45 real seconds)
 
 PRIOR_DAILY_BARS = 60
 START_CASH_CENTS = 10_000_000  # $100,000.00

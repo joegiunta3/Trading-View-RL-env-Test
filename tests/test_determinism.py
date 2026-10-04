@@ -18,9 +18,11 @@ SEEDS = [1, 7, 1234, 99999]
 # Changelog: 2026-10-04 regenerated after the intentional addition of 60 prior sessions of
 # 1-minute history (daily bars now derived from it; breakout uses the real prior-session high),
 # with US market holidays (Thanksgiving, Christmas, New Year's Day) excluded from the sessions.
+# 2026-10-04 regenerated again: episodes are two trading days (Jan 15-16); scenarios land on
+# either day; path table gained a day column.
 GOLDEN = {
-    1234: "cdec61c0fae48558ab2d6adf35c7e3665a1c8ed91f67d20dc98f615104c795f8",
-    99999: "21abfec3de2c9ea840a182566ad94a5bc64dfc7e19d2af284c09e9a6e4f1fbe7",
+    1234: "e28f0ea799f52b41a9921b43079a97550e91b2cebd506aa325d840b424e316d8",
+    99999: "1235c549b8c8e865327011050ff0b449eb1d3e704d560ff98f8df9d301b9b99a",
 }
 
 

@@ -15,6 +15,7 @@ from app.holder import EnvHolder
 class ResetIn(BaseModel):
     seed: StrictInt
     start_time: str = "09:00"
+    start_day: StrictInt = 1  # 1 or 2: the episode always has two trading days
     clock_mode: Literal["realtime", "fixed-step"] = "realtime"
     setup: dict | None = None
 
@@ -52,7 +53,7 @@ def create_env_app(holder: EnvHolder) -> FastAPI:
 
     @app.post("/_env/reset")
     def reset(body: ResetIn) -> dict:
-        e = holder.reset(body.seed, body.start_time, body.clock_mode, body.setup)
+        e = holder.reset(body.seed, body.start_time, body.clock_mode, body.setup, body.start_day)
         return {"episode_id": e.episode_id, "sim_now": e.now, "clock_mode": e.clock.mode.value}
 
     @app.post("/_env/start")

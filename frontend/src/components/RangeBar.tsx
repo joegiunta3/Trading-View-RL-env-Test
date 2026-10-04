@@ -40,7 +40,7 @@ export function RangeBar({
       </div>
       <div className="flex items-center gap-2 text-[11px] text-muted">
         <span className="num text-text" data-testid="range-clock">
-          {clock?.time ?? "--:--:--"}
+          {clock ? `Day ${clock.day} · ${clock.time}` : "--:--:--"}
         </span>
         <span>sim time</span>
       </div>

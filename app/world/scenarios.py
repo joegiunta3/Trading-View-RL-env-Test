@@ -4,6 +4,7 @@ Every fact recorded in world_truth is measured from the final cent-rounded path,
 taken from the intended overlay parameters.
 """
 
+from array import array
 from collections import deque
 
 from app.timeutil import parse_hhmm
@@ -62,7 +63,7 @@ def plant_breakout(base: list[float], t1: int, h: int) -> list[int]:
     if max(base[:a0]) >= level * 0.996:
         raise ScenarioError("morning trades too close to the prior-day high")
     r = level * 0.997 / base[t1 - 1]
-    f = list(base)
+    f = array("d", base)
     for s in range(a0, t1):
         w = (s - a0) / BREAKOUT_APPROACH
         f[s] = base[s] * (1.0 + w * (r - 1.0))
@@ -79,7 +80,7 @@ def plant_breakout(base: list[float], t1: int, h: int) -> list[int]:
 
 
 def plant_sharp_drop(base: list[float], t2: int) -> list[float]:
-    f = list(base)
+    f = array("d", base)
     for s in range(t2, len(base)):
         f[s] = base[s] * (1.0 - 0.065 * min(1.0, (s - t2) / DROP_LEN))
     return f
@@ -96,7 +97,7 @@ def plant_fakeout(base: list[float], t3: int) -> tuple[list[int], int]:
     """Dip that touches round level R exactly once at t3, then rebounds ~3%."""
     level = fakeout_level(base[t3 - FAKEOUT_APPROACH])
     k = (level / 100.0) / base[t3]
-    f = list(base)
+    f = array("d", base)
     a0 = t3 - FAKEOUT_APPROACH
     for s in range(a0, t3):
         w = (s - a0) / FAKEOUT_APPROACH
@@ -113,7 +114,7 @@ def plant_fakeout(base: list[float], t3: int) -> tuple[list[int], int]:
 
 def plant_flat_hour(base: list[float]) -> list[float]:
     """Damp price moves 13:00-14:00 to ~12% of normal, staying continuous afterwards."""
-    f = list(base)
+    f = array("d", base)
     anchor = base[T_1300]
     for s in range(T_1300, T_1400):
         f[s] = anchor * (1.0 + 0.12 * (base[s] / anchor - 1.0))
@@ -125,7 +126,7 @@ def plant_flat_hour(base: list[float]) -> list[float]:
 
 def plant_spike(base: list[float], start: int) -> list[float]:
     """-3% flash dip over 3 min, linear recovery over the next 10 min."""
-    f = list(base)
+    f = array("d", base)
     for s in range(start, start + SPIKE_DOWN + SPIKE_UP):
         if s < start + SPIKE_DOWN:
             g = 1.0 - 0.03 * (s - start) / SPIKE_DOWN

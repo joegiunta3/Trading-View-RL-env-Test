@@ -38,14 +38,14 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 
 ## 4. Simulated time
 
-- **Session:** 09:00:00 to 16:30:00 on a fixed simulated date (`2026-01-15`), 27,000 sim seconds.
-- **Scale:** `TIME_SCALE = 6` sim seconds per real second (config constant), so a full session is 4,500 real seconds (75 minutes). A 1-minute bar forms every 10 real seconds.
+- **Episode = two trading days (v0.2):** day 1 is Thu 2026-01-15 and day 2 is Fri 2026-01-16, each 09:00:00 to 16:30:00 (27,000 sim seconds). Between them is a 45-real-second **after-hours break** (270 sim seconds): trading is closed, Day orders have expired, positions and cash carry over, and the UI shows a countdown; charts, watchlists and alert setup still work. Day 2 opens with an overnight gap; day 1 becomes history on every chart and "change %" is measured from day 1's close. All `sim_ts` values are **episode seconds** from day 1 09:00 (day 2 09:00 = 27,270; episode end = 54,270); see `app/timeline.py`. Planted scenarios can land on either day.
+- **Scale:** `TIME_SCALE = 6` sim seconds per real second (config constant), so a full session is 4,500 real seconds (75 minutes) and a full two-day episode about 2.5 real hours. A 1-minute bar forms every 10 real seconds. `reset` accepts `start_day` (1 or 2) with `start_time`, so a task can begin late on day 1 or on day 2.
 - **Server-authoritative clock.** The server owns `sim_now`, computed from a monotonic wall-clock since the episode `start`. The frontend never reads the real time and cannot set it.
 - **Clock start:** the clock starts when the harness calls `POST /_env/start` (not at page load), so page-load time does not eat into the episode.
 - **Task start time:** `reset` accepts `start_time` (default 09:00). A task may start at, say, 12:00 with the morning's history already filled in, which makes lookup tasks about closed windows possible.
 - **Speed is part of the skill.** Slow and fast agents see the same world but act at different sim times. This is intentional. Log every action with its `sim_ts` so results can be analysed by speed.
 - **Test clock:** a deterministic `fixed-step` mode (clock advances only via `POST /_env/clock/advance`) is REQUIRED so oracle solvers, verifiers and tests are not flaky. Never use it in agent runs.
-- **Session end:** at 16:30 the market closes, working orders are cancelled, the UI shows "Session closed", the clock stops, and the verifier runs on final state.
+- **Session end:** at day 1's 16:30 close, working Day orders are cancelled and the after-hours break starts. At day 2's 16:30 close the episode ends: working orders are cancelled, the UI shows "Session closed", the clock stops, and the verifier runs on final state.
 - **Wall-clock cap:** harness kills an episode at session length + 5 minutes regardless.
 
 ## 5. Market simulation
@@ -92,7 +92,7 @@ Login: auto-signed in as a single seeded account. Seeded starting positions may 
 ## 8. Data model (SQLite)
 
 - `symbols(id, ticker, name, sector, spread)`
-- `path(symbol_id, sim_sec, price, volume)` full session at 1-second resolution (server-only, never sent whole)
+- `path(symbol_id, day, sim_sec, price, volume)` both episode days at 1-second resolution (server-only, never sent whole)
 - `intraday_bars(symbol_id, date, minute, o, h, l, c, v)` 60 prior sessions at 1-minute resolution
 - `daily_bars(symbol_id, date, o, h, l, c, v)` 60 prior days, derived from `intraday_bars`
 - `account(id, cash, start_cash)`; `positions(symbol_id, qty, avg_price)` (qty negative = short)

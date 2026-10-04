@@ -1,7 +1,7 @@
 import { BellRing, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError, api } from "../api";
-import { CONDITION_LABEL, fmtPrice, simTime } from "../format";
+import { CONDITION_LABEL, fmtPrice } from "../format";
 import type { Alert, AlertCondition, AlertLogEntry, SymbolInfo } from "../types";
 import { Button, Empty, ErrorText, Field, IconButton, Input, Select } from "./ui";
 
@@ -221,7 +221,7 @@ export function Alerts({
 
 function StatusBadge({ alert }: { alert: Alert }) {
   if (alert.status === "triggered")
-    return <span className="text-warn">Triggered {simTime(alert.triggered_sim_ts)}</span>;
+    return <span className="text-warn">Triggered {alert.triggered_time}</span>;
   if (alert.status === "disabled") return <span className="text-faint">Disabled</span>;
   return <span className="text-up">Active</span>;
 }

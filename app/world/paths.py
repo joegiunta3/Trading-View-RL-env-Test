@@ -1,6 +1,7 @@
 """Intraday 1-second price and volume paths: regime-switching walk + U-shaped volume."""
 
 import random
+from array import array
 
 from app.config import SESSION_SECONDS
 from app.rng import std_normal
@@ -35,13 +36,13 @@ def volume_profile(s: int, n: int = SESSION_SECONDS) -> float:
 
 def gen_intraday(
     rng: random.Random, open_px: float, daily_vol: float, base_volume: int
-) -> tuple[list[float], list[float]]:
+) -> tuple[array, array]:
     """Float price (dollars) and float volume per sim second, before scenario overlays."""
     n = SESSION_SECONDS
     sigma = daily_vol / SQRT_SESSION
     per_sec = base_volume / n
-    px = [0.0] * n
-    vol = [0.0] * n
+    px = array("d", bytes(8 * n))  # unboxed doubles: same values, far less memory churn
+    vol = array("d", bytes(8 * n))
     p = open_px
     regime = 0
     left = rng.randint(180, 1500)

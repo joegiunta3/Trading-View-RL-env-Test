@@ -2,6 +2,7 @@ import pytest
 
 from app.clock import ClockError, ClockMode, ClockState, SimClock
 from app.config import SESSION_SECONDS
+from app.timeline import EPISODE_END
 from app.timeutil import fmt_hhmmss, parse_hhmm
 from tests.conftest import make_episode, order, raises_engine
 
@@ -37,11 +38,13 @@ def test_fixed_step_frozen_until_advanced():
             c.advance(bad)
 
 
-def test_fixed_step_clamps_at_close():
+def test_fixed_step_runs_through_the_break_and_clamps_at_episode_end():
     c = SimClock(ClockMode.FIXED_STEP, 26990)
     c.start()
-    c.advance(1000)
-    assert c.now == SESSION_SECONDS and c.state is ClockState.CLOSED
+    c.advance(1000)  # past day 1's close: the break is still part of the running episode
+    assert c.now == 27990 and c.state is ClockState.RUNNING
+    c.advance(100_000)
+    assert c.now == EPISODE_END and c.state is ClockState.CLOSED
 
 
 def test_realtime_scaling_with_fake_monotonic():
@@ -56,8 +59,12 @@ def test_realtime_scaling_with_fake_monotonic():
     assert c.now == 60  # floor
     mono.t += 0.07
     assert c.now == 61
-    mono.t += 10_000
-    assert c.now == SESSION_SECONDS and c.state is ClockState.CLOSED
+    mono.t += 4_490  # 4500.17 real s elapsed -> 27001: just past day 1's close, in the break
+    assert c.now == SESSION_SECONDS + 1 and c.state is ClockState.RUNNING
+    mono.t += 45  # the 45-real-second break = 270 sim seconds -> day 2 is open
+    assert c.now == 27_271
+    mono.t += 100_000
+    assert c.now == EPISODE_END and c.state is ClockState.CLOSED
 
 
 def test_realtime_rejects_advance():
@@ -97,6 +104,9 @@ def test_orders_blocked_before_start_and_after_close():
     raises_engine(order, e, "AAPL", "buy", "market", 1, status=409, match="not open")
     e.start()
     e.advance(SESSION_SECONDS)
+    assert e.clock_view()["market_status"] == "after-hours"
+    raises_engine(order, e, "AAPL", "buy", "market", 1, status=409, match="after hours")
+    e.advance(EPISODE_END)
     assert e.clock_view()["market_status"] == "closed"
     raises_engine(order, e, "AAPL", "buy", "market", 1, status=409, match="Session closed")
     raises_engine(e.create_alert, "AAPL", "above", 1.0, status=409)
@@ -110,7 +120,9 @@ def test_close_cancels_working_orders_and_logs():
     orders = {x["id"]: x for x in e.list_orders()}
     assert orders[o["id"]]["status"] == "cancelled"
     assert orders[o["id"]]["closed_sim_ts"] == SESSION_SECONDS
+    assert orders[o["id"]]["closed_time"] == "Jan 15 16:30:00"
     assert "expired at close" in orders[o["id"]]["reason"]
     endpoints = [a["endpoint"] for a in e.trace()]
     assert "engine:expire" in endpoints and endpoints[-1] == "engine:session_closed"
-    assert [ev["type"] for ev in e.events_since(0)][-1] == "session_closed"
+    last = e.events_since(0)[-1]
+    assert (last["type"], last["day"], last["final"]) == ("session_closed", 1, False)

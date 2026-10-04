@@ -55,13 +55,18 @@ def test_partial_sell_keeps_average_cost():
 
 def test_limit_buy_rests_then_fills_at_first_touch(ep):
     sid = ep.world.by_ticker[T].id
-    asks = {s: ep.market.bid_ask(sid, s)[1] for s in range(1, 3601)}
-    limit = sorted(asks.values())[len(asks) // 10]  # touched, but not immediately
-    _, ask0 = quote_at(ep, T, 0)
-    assert ask0 > limit
+    # Find a start time where a limit below the current ask is touched within the next hour.
+    for t0 in range(0, 20_000, 1800):
+        asks = {s: ep.market.bid_ask(sid, s)[1] for s in range(t0 + 1, t0 + 3601)}
+        limit = sorted(asks.values())[len(asks) // 10]
+        if quote_at(ep, T, t0)[1] > limit:
+            break
+    else:
+        raise AssertionError("no suitable window in the path")
+    advance_to(ep, t0)
     o = order(ep, T, "buy", "limit", 5, limit_price=cents_to_usd(limit))
     assert o["status"] == "working"
-    hit = first_second(lambda s: asks[s] <= limit, 1, 3601)
+    hit = first_second(lambda s: asks[s] <= limit, t0 + 1, t0 + 3601)
     advance_to(ep, hit - 1)
     assert ep.list_orders()[0]["status"] == "working"
     ep.advance(1)

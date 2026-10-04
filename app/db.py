@@ -4,10 +4,11 @@ copied into a fresh episode database on reset."""
 import hashlib
 import json
 import sqlite3
-from functools import lru_cache
+import tempfile
+import threading
 from pathlib import Path
 
-from app.config import SEED_CACHE
+from app.config import SEED_CACHE, SESSION_SECONDS
 from app.world.generate import World, build_world
 
 SCHEMA = (Path(__file__).parent / "schema.sql").read_text()
@@ -42,8 +43,11 @@ def write_world(conn: sqlite3.Connection, world: World) -> None:
     for s in world.symbols:
         px, vol = world.px[s.id - 1], world.vol[s.id - 1]
         conn.executemany(
-            "INSERT INTO path VALUES (?,?,?,?)",
-            ((s.id, i, px[i], vol[i]) for i in range(len(px))),
+            "INSERT INTO path VALUES (?,?,?,?,?)",
+            (
+                (s.id, k // SESSION_SECONDS + 1, k % SESSION_SECONDS, px[k], vol[k])
+                for k in range(len(px))
+            ),
         )
         conn.executemany(
             "INSERT INTO intraday_bars VALUES (?,?,?,?,?,?,?,?)",
@@ -60,11 +64,26 @@ def write_world(conn: sqlite3.Connection, world: World) -> None:
     conn.execute("COMMIT")
 
 
-@lru_cache(maxsize=SEED_CACHE)
-def _template(seed: int) -> sqlite3.Connection:
-    conn = connect()
-    write_world(conn, build_world(seed))
-    return conn
+_TEMPLATE_DIR = Path(tempfile.mkdtemp(prefix="chartview-worlds-"))
+_templates: dict[int, Path] = {}  # seed -> on-disk world DB (kept out of RAM)
+_template_lock = threading.Lock()
+
+
+def _template(seed: int) -> Path:
+    """On-disk DB with the seed's world tables; at most SEED_CACHE kept, oldest deleted."""
+    with _template_lock:
+        if seed not in _templates:
+            path = _TEMPLATE_DIR / f"world-{seed}.db"
+            path.unlink(missing_ok=True)
+            conn = connect(path)
+            conn.execute("PRAGMA journal_mode = OFF")
+            conn.execute("PRAGMA synchronous = OFF")
+            write_world(conn, build_world(seed))
+            conn.close()
+            _templates[seed] = path
+            while len(_templates) > SEED_CACHE:
+                _templates.pop(next(iter(_templates))).unlink(missing_ok=True)
+        return _templates[seed]
 
 
 def new_episode_db(seed: int, path: str | Path = ":memory:") -> sqlite3.Connection:
@@ -72,7 +91,11 @@ def new_episode_db(seed: int, path: str | Path = ":memory:") -> sqlite3.Connecti
     if path != ":memory:":
         Path(path).unlink(missing_ok=True)
     conn = connect(path)
-    _template(seed).backup(conn)
+    src = connect(_template(seed))
+    try:
+        src.backup(conn)
+    finally:
+        src.close()
     return conn
 
 
