@@ -125,3 +125,17 @@ def test_env_indicator_endpoint_matches_library(tmp_path):
     expected = ind.rsi(bars, 14)
     assert r["bars"][-1]["rsi"] == round(expected[-1], 4)
     assert r["bars"][-1]["time"] == bars[-1]["time"]
+
+
+def test_hidden_flag_is_kept_and_does_not_change_identity(ep):
+    lay = ep.update_pane(
+        0, indicators=[{"type": "rsi", "hidden": True}, {"type": "ema", "hidden": False}]
+    )
+    assert lay["panes"][0]["indicators"] == [
+        {"type": "rsi", "period": 14, "hidden": True},
+        {"type": "ema", "period": 20},
+    ]
+    raises_engine(
+        ep.update_pane, 0, indicators=[{"type": "rsi"}, {"type": "rsi", "hidden": True}], status=422
+    )
+    raises_engine(ep.update_pane, 0, indicators=[{"type": "rsi", "hidden": "yes"}], status=422)

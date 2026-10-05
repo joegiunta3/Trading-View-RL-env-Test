@@ -827,8 +827,13 @@ class Episode:
                 clean[name] = v if is_int else float(v)
             if kind == "macd" and clean["fast"] >= clean["slow"]:
                 raise EngineError("MACD fast length must be shorter than slow length.", 422)
-            if clean in out:
+            if any({k: v for k, v in o.items() if k != "hidden"} == clean for o in out):
                 raise EngineError(f"That {kind.upper()} is already on this chart.", 422)
+            hidden = ind.get("hidden", False)
+            if not isinstance(hidden, bool):
+                raise EngineError("hidden must be true or false.", 422)
+            if hidden:
+                clean["hidden"] = True  # still on the chart and in the legend, just not drawn
             out.append(clean)
         if sum(i["type"] in LOWER_PANE_INDICATORS for i in out) > MAX_LOWER_PANES:
             raise EngineError(

@@ -405,7 +405,11 @@ export default function App() {
         timeframe={activePane.timeframe}
         onTimeframe={(tf) => patchPane(activeIdx, { timeframe: tf })}
         indicators={activePane.indicators}
-        onIndicators={(inds) => patchPane(activeIdx, { indicators: inds })}
+        onAddIndicator={(ind) => {
+          patchPane(activeIdx, { indicators: [...activePane.indicators, ind] });
+          pushToast({ tone: "success", title: "Indicator added to chart" });
+        }}
+        onIndicatorError={(message) => pushToast({ tone: "error", title: "Can't add indicator", body: message })}
         clock={live.clock}
         connected={live.connected}
         onAlert={openAlert}
@@ -473,6 +477,7 @@ export default function App() {
                     onMoveDrawing={moveDrawing}
                     onSelectDrawing={setSelectedDrawing}
                     onDeleteDrawing={deleteDrawing}
+                    onIndicators={(inds) => patchPane(i, { indicators: inds })}
                   />
                   {visible > 1 && (
                     <button

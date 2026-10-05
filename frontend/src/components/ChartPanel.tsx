@@ -2,10 +2,20 @@ import { BarChart, CandlestickChart, LineChart } from "echarts/charts";
 import { DataZoomComponent, GridComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Minus, Plus, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, EyeOff, Minus, Plus, RotateCcw, Settings2, Trash2 } from "lucide-react";
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import { fmtBarTime, fmtDay, fmtInt, fmtMonth, fmtPct, fmtPrice, fmtSigned, toneClass } from "../format";
-import { LOWER_PANE, type Series, compute, indicatorKey, indicatorLabel } from "../indicators";
+import {
+  LOWER_PANE,
+  type Series,
+  catalogEntry,
+  compute,
+  indicatorKey,
+  indicatorLabel,
+  paramsText,
+  shortName,
+  validate,
+} from "../indicators";
 import { indicatorColors, smaColors, theme } from "../theme";
 import type { Bar, Drawing, DrawingKind, DrawingPoint, Indicator, Quote } from "../types";
 import { DrawingLayer, type Geometry } from "./DrawingLayer";
@@ -35,7 +45,7 @@ export type RangeRequest = { ticker: string; tf: string; sessions?: number; from
 type Window = { start: number; end: number };
 /** One plotted line of an indicator, with the legend test id and label for its value. */
 type Line = { id: string; label: string; values: Series; color: string; dashed?: boolean };
-type Study = { key: string; label: string; ind: Indicator; lines: Line[]; histogram?: Series };
+type Study = { key: string; label: string; ind: Indicator; lines: Line[]; histogram?: Series; hidden: boolean };
 
 const VISIBLE_BARS = 150;
 const FUTURE_SLOTS = 60; // empty categories right of the last bar, for drawing into the future
@@ -73,6 +83,8 @@ type Props = {
   onMoveDrawing: (id: number, points: DrawingPoint[]) => void;
   onSelectDrawing: (id: number | null) => void;
   onDeleteDrawing: (id: number) => void;
+  /** Replace this pane's indicator list (hide/show, edit settings, remove). */
+  onIndicators: (next: Indicator[]) => void;
 };
 
 /** Price overlays and lower-pane studies for the given indicator configs. */
@@ -84,6 +96,7 @@ function buildStudies(bars: Bar[], indicators: Indicator[]): { overlays: Study[]
     if (ind.type === "volume") continue;
     const key = indicatorKey(ind);
     const label = indicatorLabel(ind);
+    const hidden = !!ind.hidden;
     const out = compute(bars, ind);
     if (!LOWER_PANE.has(ind.type)) {
       const c = smaColors[color++ % smaColors.length];
@@ -95,9 +108,9 @@ function buildStudies(bars: Bar[], indicators: Indicator[]): { overlays: Study[]
               { id: `${key}-lower`, label: "L", values: out.lower, color: c, dashed: true },
             ]
           : [{ id: key, label: "", values: Object.values(out)[0], color: c }];
-      overlays.push({ key, label, ind, lines });
+      overlays.push({ key, label, ind, lines, hidden });
     } else if (ind.type === "rsi") {
-      lowers.push({ key, label, ind, lines: [{ id: key, label: "", values: out.rsi, color: indicatorColors.rsi }] });
+      lowers.push({ key, label, ind, hidden, lines: [{ id: key, label: "", values: out.rsi, color: indicatorColors.rsi }] });
     } else if (ind.type === "macd") {
       lowers.push({
         key,
@@ -109,6 +122,7 @@ function buildStudies(bars: Bar[], indicators: Indicator[]): { overlays: Study[]
           { id: `${key}-histogram`, label: "Hist", values: out.histogram, color: theme.muted },
         ],
         histogram: out.histogram,
+        hidden,
       });
     } else if (ind.type === "kdj") {
       lowers.push({
@@ -120,6 +134,7 @@ function buildStudies(bars: Bar[], indicators: Indicator[]): { overlays: Study[]
           { id: `${key}-d`, label: "D", values: out.d, color: indicatorColors.d },
           { id: `${key}-j`, label: "J", values: out.j, color: indicatorColors.j },
         ],
+        hidden,
       });
     }
   }
@@ -157,7 +172,41 @@ export function ChartPanel(p: Props) {
   const dailyRef = useRef(daily);
   dailyRef.current = daily;
   const lowerCountRef = useRef(0);
-  const showVolume = indicators.some((i) => i.type === "volume");
+  const volume = indicators.find((i) => i.type === "volume");
+  const showVolume = !!volume && !volume.hidden;
+  const [selectedStudy, setSelectedStudy] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{
+    ind: Indicator;
+    draft: Record<string, string>;
+    error: string;
+    at: { top: number; left: number };
+  } | null>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const studyActions = {
+    selected: selectedStudy,
+    select: (key: string) => setSelectedStudy((k) => (k === key ? null : key)),
+    toggle: (ind: Indicator) =>
+      p.onIndicators(
+        indicators.map((i) => (indicatorKey(i) === indicatorKey(ind) ? ({ ...i, hidden: !i.hidden } as Indicator) : i)),
+      ),
+    remove: (ind: Indicator) => {
+      setSelectedStudy(null);
+      p.onIndicators(indicators.filter((i) => indicatorKey(i) !== indicatorKey(ind)));
+    },
+    edit: (ind: Indicator, anchor: HTMLElement) => {
+      const a = anchor.getBoundingClientRect();
+      const box = sectionRef.current!.getBoundingClientRect();
+      const top = Math.min(a.bottom - box.top + 4, box.height - 190); // keep it inside the pane
+      setEditing({
+        ind,
+        at: { top: Math.max(4, top), left: Math.max(4, Math.min(a.left - box.left, box.width - 270)) },
+        error: "",
+        draft: Object.fromEntries(
+          catalogEntry(ind.type).params.map((x) => [x.name, String((ind as unknown as Record<string, number>)[x.name])]),
+        ),
+      });
+    },
+  };
   const studies = useMemo(() => buildStudies(bars, indicators), [bars, indicators]);
   lowerCountRef.current = studies.lowers.length;
   const layout = paneLayout(size.h, studies.lowers.length);
@@ -207,7 +256,7 @@ export function ChartPanel(p: Props) {
     const c = chart.current;
     if (!c || size.h === 0) return;
     const n = bars.length;
-    const studyKeys = [...studies.overlays, ...studies.lowers].map((s) => s.key).join(",");
+    const studyKeys = [...studies.overlays, ...studies.lowers].map((s) => `${s.key}${s.hidden ? "~" : ""}`).join(",");
     const key = `${p.barsKey}|${showVolume}|${studyKeys}|${crosshair}`;
     const fresh = key !== viewKey.current || prevLen.current === 0;
     let w: Window;
@@ -264,6 +313,14 @@ export function ChartPanel(p: Props) {
   }, [p.controls]);
 
   useEffect(() => setHover(null), [p.barsKey]);
+  useEffect(() => {
+    if (!selectedStudy) return;
+    const off = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest?.("[data-study]")) setSelectedStudy(null);
+    };
+    document.addEventListener("mousedown", off);
+    return () => document.removeEventListener("mousedown", off);
+  }, [selectedStudy]);
 
   const onKey = (e: React.KeyboardEvent) => {
     const c = p.controls.current;
@@ -285,6 +342,7 @@ export function ChartPanel(p: Props) {
   const idx = hover != null && hover < bars.length ? hover : bars.length - 1;
   return (
     <section
+      ref={sectionRef}
       className="group relative flex min-h-0 flex-1 flex-col bg-bg outline-none"
       aria-label="Price chart. Arrow keys pan, plus and minus zoom, 0 resets."
       tabIndex={0}
@@ -295,7 +353,8 @@ export function ChartPanel(p: Props) {
         {...p}
         idx={idx}
         overlays={studies.overlays}
-        showVolume={showVolume}
+        volume={volume ?? null}
+        actions={studyActions}
         daily={daily}
         narrow={narrow}
         collapsed={collapsed}
@@ -304,7 +363,9 @@ export function ChartPanel(p: Props) {
       <div className="relative min-h-0 flex-1">
         <div ref={el} className="absolute inset-0" data-testid="chart-canvas" />
         {studies.lowers.map((s, i) =>
-          layout.lowers[i] ? <LowerLegend key={s.key} study={s} idx={idx} top={layout.lowers[i].top - SUB_GAP + 1} /> : null,
+          layout.lowers[i] ? (
+            <LowerLegend key={s.key} study={s} idx={idx} top={layout.lowers[i].top - SUB_GAP + 1} actions={studyActions} />
+          ) : null,
         )}
         <DrawingLayer
           geom={geometry(chart.current, bars, win.current, timeframe, layout.mainBottom)}
@@ -319,6 +380,23 @@ export function ChartPanel(p: Props) {
           onDelete={p.onDeleteDrawing}
         />
       </div>
+      {editing && (
+        <IndicatorSettings
+          editing={editing}
+          onDraft={(draft) => setEditing({ ...editing, draft, error: "" })}
+          onCancel={() => setEditing(null)}
+          onApply={() => {
+            const next = { ...editing.ind } as Record<string, unknown>;
+            for (const [k, v] of Object.entries(editing.draft)) next[k] = Number(v);
+            const ind = next as Indicator;
+            const err = validate(ind, indicators, indicatorKey(editing.ind));
+            if (err) return setEditing({ ...editing, error: err });
+            p.onIndicators(indicators.map((i) => (indicatorKey(i) === indicatorKey(editing.ind) ? ind : i)));
+            setEditing(null);
+            setSelectedStudy(null);
+          }}
+        />
+      )}
       <ChartNav controls={p.controls} bottom={layout.mainBottom + 12} />
       {p.overlay && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
@@ -337,22 +415,173 @@ export function ChartPanel(p: Props) {
 
 const fmtValue = (v: number | null | undefined) => (v == null ? "—" : fmtPrice(Math.abs(v) < 0.005 ? 0 : v));
 
-function LowerLegend({ study, idx, top }: { study: Study; idx: number; top: number }) {
+type StudyActions = {
+  selected: string | null;
+  select: (key: string) => void;
+  toggle: (ind: Indicator) => void;
+  remove: (ind: Indicator) => void;
+  edit: (ind: Indicator, anchor: HTMLElement) => void;
+};
+
+/** One indicator's legend row: name, settings, values; hover or click shows its actions. */
+function StudyRow({
+  ind,
+  color,
+  actions,
+  children,
+}: {
+  ind: Indicator;
+  color: string;
+  actions: StudyActions;
+  children: React.ReactNode;
+}) {
+  const key = indicatorKey(ind);
+  const selected = actions.selected === key;
+  const icon = (
+    label: string,
+    testId: string,
+    onClick: (el: HTMLElement) => void,
+    node: React.ReactNode,
+    pressed?: boolean,
+  ) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pressed}
+      data-testid={testId}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick(e.currentTarget);
+      }}
+      className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-hover hover:text-strong"
+    >
+      {node}
+    </button>
+  );
   return (
     <div
-      className="pointer-events-none absolute left-3 z-10 flex items-baseline gap-2 text-[11px]"
-      style={{ top }}
+      data-study={key}
+      data-testid={`study-${key}`}
+      data-hidden={!!ind.hidden}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      onClick={() => actions.select(key)}
+      onKeyDown={(e) => e.key === "Enter" && actions.select(key)}
+      className={`group/row pointer-events-auto inline-flex h-6 cursor-pointer items-center gap-1.5 rounded border px-1.5 ${
+        selected ? "border-line-strong bg-raised" : "border-transparent hover:border-line hover:bg-raised/70"
+      }`}
+    >
+      <span className={ind.hidden ? "text-faint" : ""} style={ind.hidden ? undefined : { color }}>
+        {shortName(ind)}
+      </span>
+      {catalogEntry(ind.type).params.length > 0 && <span className="text-faint">{paramsText(ind)}</span>}
+      {!ind.hidden && children}
+      <span className={`items-center gap-0.5 ${selected ? "flex" : "hidden group-hover/row:flex group-focus/row:flex"}`}>
+        {icon(
+          ind.hidden ? "Show" : "Hide",
+          `study-hide-${key}`,
+          () => actions.toggle(ind),
+          ind.hidden ? <EyeOff size={13} /> : <Eye size={13} />,
+          !!ind.hidden,
+        )}
+        {catalogEntry(ind.type).params.length > 0 &&
+          icon("Settings", `study-settings-${key}`, (el) => actions.edit(ind, el), <Settings2 size={13} />)}
+        {icon("Remove", `study-remove-${key}`, () => actions.remove(ind), <Trash2 size={13} />)}
+      </span>
+    </div>
+  );
+}
+
+function LowerLegend({ study, idx, top, actions }: { study: Study; idx: number; top: number; actions: StudyActions }) {
+  return (
+    <div
+      className="pointer-events-none absolute left-2 z-10 flex items-center text-[11px]"
+      style={{ top: top - 4 }}
       data-testid={`lower-${study.key}`}
     >
-      <span className="font-medium text-text">{study.label}</span>
-      {study.lines.map((l) => (
-        <span key={l.id} className="inline-flex items-baseline gap-0.5">
-          {l.label && <span className="text-muted">{l.label}</span>}
-          <span className="num" style={{ color: l.color }} data-testid={`legend-${l.id}`}>
-            {fmtValue(l.values[idx])}
+      <StudyRow ind={study.ind} color={study.lines[0].color} actions={actions}>
+        {study.lines.map((l) => (
+          <span key={l.id} className="inline-flex items-baseline gap-0.5">
+            {l.label && <span className="text-muted">{l.label}</span>}
+            <span className="num" style={{ color: l.color }} data-testid={`legend-${l.id}`}>
+              {fmtValue(l.values[idx])}
+            </span>
           </span>
-        </span>
-      ))}
+        ))}
+      </StudyRow>
+    </div>
+  );
+}
+
+/** Popover to edit one indicator's settings. */
+function IndicatorSettings({
+  editing,
+  onDraft,
+  onCancel,
+  onApply,
+}: {
+  editing: { ind: Indicator; draft: Record<string, string>; error: string; at: { top: number; left: number } };
+  onDraft: (d: Record<string, string>) => void;
+  onCancel: () => void;
+  onApply: () => void;
+}) {
+  const entry = catalogEntry(editing.ind.type);
+  return (
+    <div
+      data-study="settings"
+      data-testid="indicator-settings"
+      role="dialog"
+      aria-label={`${entry.name} settings`}
+      style={{ top: editing.at.top, left: editing.at.left }}
+      className="absolute z-30 w-64 rounded-md border border-line-strong bg-raised p-3 shadow-2xl"
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onApply();
+        if (e.key === "Escape") onCancel();
+      }}
+    >
+      <div className="mb-2 text-[13px] font-semibold text-strong">{entry.name}</div>
+      <div className="flex flex-col gap-2">
+        {entry.params.map((p) => (
+          <label key={p.name} className="flex items-center justify-between gap-3 text-[12px]">
+            <span className="text-muted">{p.label}</span>
+            <input
+              type="number"
+              step={p.int ? 1 : 0.1}
+              min={p.min}
+              max={p.max}
+              data-testid={`settings-${p.name}`}
+              value={editing.draft[p.name]}
+              onChange={(e) => onDraft({ ...editing.draft, [p.name]: e.target.value })}
+              className="h-7 w-20 rounded border border-line bg-bg px-2 text-right text-[12px] outline-none focus:border-accent"
+            />
+          </label>
+        ))}
+      </div>
+      {editing.error && (
+        <p role="alert" data-testid="settings-error" className="mt-2 text-[11px] text-down">
+          {editing.error}
+        </p>
+      )}
+      <div className="mt-3 flex justify-end gap-1.5">
+        <button
+          type="button"
+          data-testid="settings-cancel"
+          onClick={onCancel}
+          className="h-7 rounded px-3 text-[12px] text-muted hover:bg-hover hover:text-text"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-testid="settings-apply"
+          onClick={onApply}
+          className="h-7 rounded bg-accent px-3 text-[12px] font-medium text-strong hover:brightness-110"
+        >
+          Apply
+        </button>
+      </div>
     </div>
   );
 }
@@ -389,7 +618,8 @@ function Legend(
   p: Props & {
     idx: number;
     overlays: Study[];
-    showVolume: boolean;
+    volume: Indicator | null;
+    actions: StudyActions;
     daily: boolean;
     narrow: boolean;
     collapsed: boolean;
@@ -469,12 +699,17 @@ function Legend(
               </button>
             </div>
           )}
-          {(p.showVolume || p.overlays.length > 0) && (
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-              {p.showVolume && bar && item("Vol", fmtInt(bar.v), "legend-vol", "text-text")}
+          {(p.volume || p.overlays.length > 0) && (
+            <div className="-ml-1.5 flex flex-col items-start gap-0.5">
+              {p.volume && bar && (
+                <StudyRow ind={p.volume} color={theme.muted} actions={p.actions}>
+                  <span className="num text-text" data-testid="legend-vol">
+                    {fmtInt(bar.v)}
+                  </span>
+                </StudyRow>
+              )}
               {p.overlays.map((s) => (
-                <span key={s.key} className="inline-flex items-baseline gap-1" data-testid={`overlay-${s.key}`}>
-                  <span style={{ color: s.lines[0].color }}>{s.label}</span>
+                <StudyRow key={s.key} ind={s.ind} color={s.lines[0].color} actions={p.actions}>
                   {s.lines.map((l) => (
                     <span key={l.id} className="inline-flex items-baseline gap-0.5">
                       {l.label && <span className="text-muted">{l.label}</span>}
@@ -483,7 +718,7 @@ function Legend(
                       </span>
                     </span>
                   ))}
-                </span>
+                </StudyRow>
               ))}
             </div>
           )}
@@ -742,11 +977,12 @@ function buildOption(
             }
           : undefined,
       },
-      ...studies.overlays.flatMap((s) => s.lines.map((l) => lineSeries(l, 0, 0))),
+      ...studies.overlays.filter((s) => !s.hidden).flatMap((s) => s.lines.map((l) => lineSeries(l, 0, 0))),
       ...studies.lowers.flatMap((s, i) => {
         const x = i + 1;
         const y = 2 + i;
         const out: object[] = [];
+        if (s.hidden) return [{ type: "line", xAxisIndex: x, yAxisIndex: y, data: [], silent: true }];
         if (s.histogram) {
           out.push({
             name: `${s.key}-bars`,

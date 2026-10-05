@@ -16,7 +16,8 @@ type Props = {
   timeframe: string;
   onTimeframe: (tf: string) => void;
   indicators: Indicator[];
-  onIndicators: (inds: Indicator[]) => void;
+  onAddIndicator: (ind: Indicator) => void;
+  onIndicatorError: (message: string) => void;
   clock: Clock | null;
   connected: boolean;
   onAlert: () => void;
@@ -48,7 +49,7 @@ export function Toolbar(p: Props) {
         ))}
       </div>
       <Divider />
-      <IndicatorMenu indicators={p.indicators} onChange={p.onIndicators} />
+      <IndicatorMenu indicators={p.indicators} onAdd={p.onAddIndicator} onError={p.onIndicatorError} />
       <Button variant="ghost" data-testid="toolbar-alert" onClick={p.onAlert}>
         <AlarmClockPlus size={14} /> Alert
       </Button>

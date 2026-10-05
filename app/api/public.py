@@ -64,6 +64,7 @@ class Indicator(BaseModel):
     signal: int | None = None
     k: int | None = None
     d: int | None = None
+    hidden: bool | None = None
 
 
 class LayoutIn(BaseModel):

@@ -42,8 +42,7 @@ test("timeframe and SMA settings are saved and computed correctly", async ({ app
   await expect(app.getByTestId("legend-timeframe")).toHaveText("15m");
 
   await app.getByTestId("indicators-button").click();
-  await app.getByTestId("sma-period").fill("20");
-  await app.getByTestId("add-sma").click();
+  await app.getByTestId("add-sma").click(); // standard settings: SMA 20
   await app.getByTestId("indicators-button").click();
 
   await expect
@@ -59,13 +58,14 @@ test("timeframe and SMA settings are saved and computed correctly", async ({ app
   await expect(app.getByTestId("legend-sma-20")).toBeVisible();
 });
 
-test("volume can be toggled off", async ({ app, request }) => {
-  await app.getByTestId("indicators-button").click();
-  await app.getByTestId("toggle-volume").uncheck();
+test("volume can be hidden and removed from its legend row", async ({ app, request }) => {
+  await app.getByTestId("study-volume").click();
+  await app.getByTestId("study-hide-volume").click();
+  await expect(app.getByTestId("study-volume")).toHaveAttribute("data-hidden", "true");
+  await app.getByTestId("study-volume").click();
+  await app.getByTestId("study-remove-volume").click();
   await expect(app.getByTestId("legend-vol")).toHaveCount(0);
-  await expect
-    .poll(async () => (await (await request.get("/api/layout")).json()).panes[0].indicators)
-    .toEqual([]);
+  await expect.poll(async () => (await (await request.get("/api/layout")).json()).panes[0].indicators).toEqual([]);
 });
 
 test("hovering the chart shows that bar in the legend; zoom tools work", async ({ app, env }) => {

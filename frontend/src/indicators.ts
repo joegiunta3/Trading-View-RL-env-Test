@@ -2,7 +2,7 @@
  * Technical indicators. Same formulas as the server (app/indicators.py), which graders use, so
  * the values in the chart legends match what tasks are checked against.
  */
-import type { Bar, Indicator } from "./types";
+import type { Bar, Indicator, IndicatorType } from "./types";
 
 export type Series = (number | null)[];
 
@@ -190,4 +190,94 @@ export function indicatorKey(ind: Indicator): string {
     default:
       return `${ind.type}-${ind.period}`;
   }
+}
+
+export type ParamSpec = { name: string; label: string; def: number; min: number; max: number; int: boolean };
+
+/** Every indicator the menu offers. Defaults and bounds match the server (INDICATOR_PARAMS). */
+export const CATALOG: { type: IndicatorType; name: string; desc: string; params: ParamSpec[] }[] = [
+  { type: "volume", name: "Volume", desc: "Bars along the bottom of the price chart", params: [] },
+  {
+    type: "sma",
+    name: "Moving Average (SMA)",
+    desc: "Simple average of closes",
+    params: [{ name: "period", label: "Length", def: 20, min: 1, max: 500, int: true }],
+  },
+  {
+    type: "ema",
+    name: "Exponential Moving Average (EMA)",
+    desc: "Weighted toward recent closes",
+    params: [{ name: "period", label: "Length", def: 20, min: 1, max: 500, int: true }],
+  },
+  {
+    type: "bb",
+    name: "Bollinger Bands",
+    desc: "SMA with standard-deviation bands",
+    params: [
+      { name: "period", label: "Length", def: 20, min: 2, max: 500, int: true },
+      { name: "stddev", label: "StdDev", def: 2, min: 0.5, max: 5, int: false },
+    ],
+  },
+  { type: "vwap", name: "VWAP", desc: "Volume-weighted average price, resets each session", params: [] },
+  {
+    type: "rsi",
+    name: "Relative Strength Index (RSI)",
+    desc: "Momentum from 0 to 100, in its own pane",
+    params: [{ name: "period", label: "Length", def: 14, min: 2, max: 100, int: true }],
+  },
+  {
+    type: "macd",
+    name: "MACD",
+    desc: "EMA difference with signal line and histogram",
+    params: [
+      { name: "fast", label: "Fast length", def: 12, min: 1, max: 100, int: true },
+      { name: "slow", label: "Slow length", def: 26, min: 2, max: 200, int: true },
+      { name: "signal", label: "Signal length", def: 9, min: 1, max: 100, int: true },
+    ],
+  },
+  {
+    type: "kdj",
+    name: "KDJ",
+    desc: "Stochastic K, D and J lines",
+    params: [
+      { name: "period", label: "Length", def: 9, min: 1, max: 100, int: true },
+      { name: "k", label: "K smoothing", def: 3, min: 1, max: 20, int: true },
+      { name: "d", label: "D smoothing", def: 3, min: 1, max: 20, int: true },
+    ],
+  },
+];
+
+export const MAX_INDICATORS = 10;
+export const MAX_LOWER_PANES = 3;
+
+export const catalogEntry = (type: IndicatorType) => CATALOG.find((c) => c.type === type)!;
+
+export function defaults(type: IndicatorType): Indicator {
+  return { type, ...Object.fromEntries(catalogEntry(type).params.map((p) => [p.name, p.def])) } as Indicator;
+}
+
+/** Name without parameters, e.g. "MACD", "BB". */
+export const shortName = (ind: Indicator) => (ind.type === "volume" ? "Vol" : ind.type.toUpperCase());
+
+/** Parameters as shown next to the name, e.g. "12 26 9". */
+export const paramsText = (ind: Indicator) =>
+  catalogEntry(ind.type)
+    .params.map((p) => String((ind as unknown as Record<string, number>)[p.name]))
+    .join(" ");
+
+/** Why `next` can't go on a chart with `current` (replacing `replaceKey`, if editing), or null. */
+export function validate(next: Indicator, current: Indicator[], replaceKey?: string): string | null {
+  const others = current.filter((i) => indicatorKey(i) !== replaceKey);
+  for (const p of catalogEntry(next.type).params) {
+    const v = (next as unknown as Record<string, number>)[p.name];
+    if (!Number.isFinite(v) || (p.int && !Number.isInteger(v)) || v < p.min || v > p.max)
+      return `${p.label} must be ${p.int ? "a whole number" : "a number"} from ${p.min} to ${p.max}.`;
+  }
+  if (next.type === "macd" && next.fast >= next.slow) return "MACD fast length must be shorter than slow length.";
+  if (others.some((i) => indicatorKey(i) === indicatorKey(next)))
+    return next.type === "volume" ? "Volume is already on this chart." : `${indicatorLabel(next)} is already on this chart.`;
+  if (others.length >= MAX_INDICATORS) return `At most ${MAX_INDICATORS} indicators per chart.`;
+  if (LOWER_PANE.has(next.type) && others.filter((i) => LOWER_PANE.has(i.type)).length >= MAX_LOWER_PANES)
+    return `At most ${MAX_LOWER_PANES} lower panes (RSI, MACD, KDJ) per chart.`;
+  return null;
 }

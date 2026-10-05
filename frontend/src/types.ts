@@ -41,7 +41,8 @@ export type Quote = SymbolInfo & {
 /** `date` is the session date (YYYY-MM-DD); `label` is the bar's open time (HH:MM) or its date for 1D. */
 export type Bar = { time: number; date: string; label: string; o: number; h: number; l: number; c: number; v: number };
 
-export type Indicator =
+/** An indicator on a chart pane. `hidden` keeps it on the chart and in the legend but undrawn. */
+export type Indicator = (
   | { type: "volume" }
   | { type: "sma"; period: number }
   | { type: "ema"; period: number }
@@ -49,7 +50,8 @@ export type Indicator =
   | { type: "vwap" }
   | { type: "rsi"; period: number }
   | { type: "macd"; fast: number; slow: number; signal: number }
-  | { type: "kdj"; period: number; k: number; d: number };
+  | { type: "kdj"; period: number; k: number; d: number }
+) & { hidden?: boolean };
 
 export type IndicatorType = Indicator["type"];
 

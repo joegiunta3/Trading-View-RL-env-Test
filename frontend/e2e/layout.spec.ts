@@ -50,9 +50,12 @@ test("each pane holds its own symbol, timeframe and indicators", async ({ app, r
   }
   await pane(app, 2).click({ position: { x: 200, y: 160 } });
   await app.getByTestId("indicators-button").click();
-  await app.getByTestId("sma-period").fill("50");
   await app.getByTestId("add-sma").click();
   await app.getByTestId("indicators-button").click();
+  await pane(app, 2).getByTestId("study-sma-20").click();
+  await pane(app, 2).getByTestId("study-settings-sma-20").click();
+  await pane(app, 2).getByTestId("settings-period").fill("50");
+  await pane(app, 2).getByTestId("settings-apply").click();
   await expect(pane(app, 2).getByTestId("legend-sma-50")).toBeVisible();
   await expect(pane(app, 0).getByTestId("legend-sma-50")).toHaveCount(0);
 
