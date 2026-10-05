@@ -140,3 +140,19 @@ export type AlertLogEntry = {
 };
 
 export type EngineEvent = { seq: number; type: string; sim_ts: number; [key: string]: unknown };
+
+export type DrawingKind = "info_line" | "trendline" | "horizontal_line" | "vertical_line";
+
+/** A chart drawing point: a bar's epoch label (may be in the empty future area) and a price. */
+export type DrawingPoint = { time: number; price: number; label?: string };
+
+export type Drawing = {
+  id: number;
+  ticker: string;
+  kind: DrawingKind;
+  label: string;
+  points: DrawingPoint[];
+  stats: { price_change: number; pct_change: number; change_cents: number; time_span_seconds: number } | null;
+  created_sim_ts: number;
+  updated_sim_ts: number;
+};

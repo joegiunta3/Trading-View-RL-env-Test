@@ -23,6 +23,7 @@ STATE_TABLES = (
     "alerts",
     "alert_events",
     "chart_panes",
+    "drawings",
     "ui_state",
 )
 

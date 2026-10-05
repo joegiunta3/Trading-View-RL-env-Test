@@ -156,6 +156,64 @@ waiting for the go-ahead.**
 
 ---
 
+## 3B. Line drawing tools: **APPROVED AND BUILT** (first four tools; merged into SPEC.md §6/§8)
+
+Owner request (2026-10-05) with reference screenshots of a line-tools menu and an info line.
+Original icons and styling; no copied assets.
+
+### Tools (left toolbar, "Lines" flyout)
+| Tool | Placement | What it draws |
+|---|---|---|
+| Trendline | 2 clicks | segment between two points |
+| Ray | 2 clicks | from point 1 through point 2, extended to the right edge |
+| **Info line** | 2 clicks | segment plus a live info label (below) |
+| Extended line | 2 clicks | line through both points, extended both ways |
+| Trend angle | 2 clicks | segment plus an angle arc and degree label |
+| Horizontal line | 1 click | full-width line at a price |
+| Horizontal ray | 1 click | line from a point to the right edge |
+| Vertical line | 1 click | full-height line at a bar |
+| Crossline | 1 click | horizontal plus vertical line through a point |
+
+**Info line label** (updates live while drawing or dragging):
+- price change: `+46.66 (+0.15%), 4,666` (dollars, percent from the start point, and cents)
+- span: `2 bars (2h)` (bar count and time span), plus `distance: 117 px`
+- angle: `20.59°` (screen angle, so it depends on zoom, like the reference)
+
+### Behavior *(proposed)*
+- **Anchored to data, not pixels:** each point is stored as (bar time, price), so drawings stay
+  put through zoom, pan, live updates and timeframe changes.
+- **Per symbol:** a drawing belongs to its symbol and shows on every pane and timeframe showing
+  that symbol (like the reference product). [Q-D2]
+- **Editing:** click a drawing to select it (handles appear); drag a handle to move one point,
+  drag the line to move it all; Delete/Backspace removes it; Esc cancels a drawing in progress.
+  Toolbar: "Remove all drawings" for the current symbol.
+- **Right-side space:** the chart gets empty space to the right of the last bar so points can be
+  placed in the future (no data is shown there, so nothing leaks).
+- **Magnet (optional):** snap points to the nearest bar's open/high/low/close. [Q-D3]
+- **Keyboard shortcuts:** Alt+T trendline, Alt+H horizontal line, Alt+J horizontal ray,
+  Alt+V vertical line, Alt+C crossline.
+- **Drawings list ("Object list"):** a panel listing each drawing as text: tool, symbol, points
+  (date/time and price), and the info line's numbers. Lets agents read exact values and gives
+  writers something checkable. [Q-D4]
+
+### State, logging, grading
+- `drawings(id, symbol_id, kind, points_json, created_sim_ts, updated_sim_ts)`; all four views are
+  in `/_env/state`. Every create, move and delete is in `action_log` with `sim_ts`.
+- Rubrics can then say e.g. "draw an info line on AAPL from the Jan 15 10:00 5m bar low to the
+  11:00 bar high" or "mark day 1's high with a horizontal line before day 2 opens", checked with a
+  price/time tolerance.
+- Price change and % for the info line are computed server-side from the stored points too (the
+  same numbers the label shows), so they're available to graders.
+
+### Decisions (owner, 2026-10-05)
+- **[Q-D1]** First version: **Info line, Trendline, Horizontal line, Vertical line.** Ray, Extended
+  line, Trend angle, Horizontal ray and Crossline come later.
+- **[Q-D2]** **Per symbol** (shared across panes and timeframes).
+- **[Q-D3]** **Magnet included**, a toggle that is off by default.
+- **[Q-D4]** **Drawings list panel included.**
+
+---
+
 ## 4. Further environment features (candidates, after multi-chart)
 
 Each needs your approval before it's built. Items marked ⚠ reverse a v0.1 non-goal (SPEC §1).

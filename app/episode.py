@@ -17,7 +17,7 @@ from pathlib import Path
 from app.clock import ClockError, ClockMode, ClockState, SimClock
 from app.config import SESSION_DATES, SESSION_SECONDS, START_CASH_CENTS, TIME_SCALE
 from app.db import new_episode_db, state_hash
-from app.engine import account, alerts, orders
+from app.engine import account, alerts, drawings, orders
 from app.engine.errors import EngineError
 from app.market import TIMEFRAMES, MarketData, market_for_seed
 from app.timeline import (
@@ -609,6 +609,57 @@ class Episode:
             raise EngineError(f"Note must be at most {MAX_NOTE_LEN} characters.", 422)
         return note
 
+    # --- drawings ----------------------------------------------------------------------------
+
+    @_locked
+    def list_drawings(self, ticker: str | None = None) -> list[dict]:
+        if ticker is None:
+            rows = self.conn.execute("SELECT * FROM drawings ORDER BY id").fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM drawings WHERE symbol_id = ? ORDER BY id", (self._sid(ticker),)
+            ).fetchall()
+        return [drawings.view(self.conn, r) for r in rows]
+
+    @_locked
+    def create_drawing(self, ticker: str, kind: str, points: list[dict]) -> dict:
+        with self._tx():
+            t = self.sync()
+            sid = self._sid(ticker)
+            did = drawings.create(self.conn, t, sid, kind, points)
+            v = drawings.view(self.conn, drawings.get_row(self.conn, did))
+            self._log(
+                "POST /api/drawings",
+                {"id": did, "ticker": v["ticker"], "kind": kind, "points": v["points"]},
+            )
+            return v
+
+    @_locked
+    def move_drawing(self, drawing_id: int, points: list[dict]) -> dict:
+        with self._tx():
+            t = self.sync()
+            drawings.move(self.conn, t, drawing_id, points)
+            v = drawings.view(self.conn, drawings.get_row(self.conn, drawing_id))
+            self._log("PATCH /api/drawings", {"id": drawing_id, "points": v["points"]})
+            return v
+
+    @_locked
+    def delete_drawing(self, drawing_id: int) -> None:
+        with self._tx():
+            self.sync()
+            drawings.get_row(self.conn, drawing_id)
+            self.conn.execute("DELETE FROM drawings WHERE id = ?", (drawing_id,))
+            self._log("DELETE /api/drawings", {"id": drawing_id})
+
+    @_locked
+    def delete_symbol_drawings(self, ticker: str) -> int:
+        with self._tx():
+            self.sync()
+            sid = self._sid(ticker)
+            n = self.conn.execute("DELETE FROM drawings WHERE symbol_id = ?", (sid,)).rowcount
+            self._log("DELETE /api/drawings", {"ticker": self._ticker(sid), "count": n})
+            return n
+
     # --- chart layout and panes ----------------------------------------------------------------
 
     def _ui(self, key: str) -> str:
@@ -762,6 +813,7 @@ class Episode:
                 "alerts",
                 "alert_events",
                 "chart_panes",
+                "drawings",
                 "ui_state",
             ):
                 tables[t] = [dict(r) for r in self.conn.execute(f"SELECT * FROM {t} ORDER BY 1")]

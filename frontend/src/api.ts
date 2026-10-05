@@ -6,6 +6,9 @@ import type {
   AppConfig,
   Bar,
   Clock,
+  Drawing,
+  DrawingKind,
+  DrawingPoint,
   Indicator,
   Layout,
   LayoutId,
@@ -97,6 +100,14 @@ export const api = {
   ) => request<Alert>("PATCH", `/api/alerts/${id}`, changes),
   deleteAlert: (id: number) => request<{ ok: boolean }>("DELETE", `/api/alerts/${id}`),
 
+  drawings: () => request<Drawing[]>("GET", "/api/drawings"),
+  createDrawing: (ticker: string, kind: DrawingKind, points: DrawingPoint[]) =>
+    request<Drawing>("POST", "/api/drawings", { ticker, kind, points: points.map(({ time, price }) => ({ time, price })) }),
+  moveDrawing: (id: number, points: DrawingPoint[]) =>
+    request<Drawing>("PATCH", `/api/drawings/${id}`, { points: points.map(({ time, price }) => ({ time, price })) }),
+  deleteDrawing: (id: number) => request<{ ok: boolean }>("DELETE", `/api/drawings/${id}`),
+  deleteSymbolDrawings: (ticker: string) =>
+    request<{ deleted: number }>("DELETE", `/api/drawings?ticker=${enc(ticker)}`),
   layout: () => request<Layout>("GET", "/api/layout"),
   setLayout: (layout: LayoutId) => request<Layout>("PUT", "/api/layout", { layout }),
   setActivePane: (pane: number) => request<Layout>("PUT", "/api/layout/active", { pane }),

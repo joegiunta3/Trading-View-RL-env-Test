@@ -3,8 +3,9 @@ import { createRef, type RefObject, useCallback, useEffect, useMemo, useRef, use
 import { ApiError, api } from "./api";
 import { Alerts } from "./components/Alerts";
 import { BottomPanel } from "./components/BottomPanel";
+import { DrawingsList } from "./components/DrawingsList";
 import { type ChartControls, ChartPanel, type RangeRequest } from "./components/ChartPanel";
-import { LeftRail } from "./components/LeftRail";
+import { LINE_TOOLS, LeftRail } from "./components/LeftRail";
 import { OrderTicket, type TicketPrefill } from "./components/OrderTicket";
 import { RangeBar, type RangePreset, rangePresets } from "./components/RangeBar";
 import { Screener } from "./components/Screener";
@@ -22,6 +23,9 @@ import type {
   AlertLogEntry,
   AppConfig,
   Bar,
+  Drawing,
+  DrawingKind,
+  DrawingPoint,
   EngineEvent,
   Indicator,
   Layout,
@@ -35,7 +39,7 @@ import type {
   Watchlist,
 } from "./types";
 
-type SideTab = "watchlist" | "alerts" | "screener";
+type SideTab = "watchlist" | "alerts" | "screener" | "drawings";
 type Series = { key: string; bars: Bar[] };
 
 const TOAST_MS = 6000;
@@ -70,6 +74,10 @@ export default function App() {
   const [prefill, setPrefill] = useState<TicketPrefill | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>("watchlist");
   const [crosshair, setCrosshair] = useState(true);
+  const [drawings, setDrawings] = useState<Drawing[]>([]);
+  const [tool, setTool] = useState<DrawingKind | null>(null);
+  const [magnet, setMagnet] = useState(false);
+  const [selectedDrawing, setSelectedDrawing] = useState<number | null>(null);
   const controls = useRef<RefObject<ChartControls | null>[]>(
     Array.from({ length: PANES }, () => createRef<ChartControls | null>()),
   );
@@ -98,6 +106,7 @@ export default function App() {
     quiet(api.trades(), setTrades);
   }, []);
   const refreshWatchlists = useCallback(() => api.watchlists().then(setWatchlists), []);
+  const refreshDrawings = useCallback(() => api.drawings().then(setDrawings), []);
   const refreshAlerts = useCallback(async () => {
     const [a, l] = await Promise.all([api.alerts(), api.alertLog()]);
     setAlerts(a);
@@ -174,7 +183,9 @@ export default function App() {
         setMaximized(null);
         setLayout(lay);
         setNotReady(false);
-        await Promise.all([refreshWatchlists(), refreshAlerts()]);
+        setSelectedDrawing(null);
+        setTool(null);
+        await Promise.all([refreshWatchlists(), refreshAlerts(), refreshDrawings()]);
         refreshOrders();
         refreshAccount();
       } catch (e) {
@@ -188,7 +199,7 @@ export default function App() {
       cancelled = true;
       if (retry) clearTimeout(retry);
     };
-  }, [live.epoch, refreshAccount, refreshAlerts, refreshOrders, refreshWatchlists]);
+  }, [live.epoch, refreshAccount, refreshAlerts, refreshOrders, refreshWatchlists, refreshDrawings]);
 
   const loadBars = useCallback((pane: number, ticker: string, tf: string) => {
     const req = ++barsReq.current[pane];
@@ -299,6 +310,61 @@ export default function App() {
     );
   };
 
+  // --- drawings -----------------------------------------------------------------------------
+
+  const drawingError = useCallback(
+    (e: unknown) => {
+      pushToast({ tone: "error", title: "Drawing not saved", body: e instanceof ApiError ? e.message : "" });
+      refreshDrawings().catch(() => {});
+    },
+    [pushToast, refreshDrawings],
+  );
+
+  const createDrawing = (ticker: string, kind: DrawingKind, points: DrawingPoint[]) => {
+    setTool(null);
+    api
+      .createDrawing(ticker, kind, points)
+      .then((d) => {
+        setSelectedDrawing(d.id);
+        return refreshDrawings();
+      })
+      .catch(drawingError);
+  };
+  const moveDrawing = (id: number, points: DrawingPoint[]) => {
+    setDrawings((ds) => ds.map((d) => (d.id === id ? { ...d, points } : d)));
+    api.moveDrawing(id, points).then(refreshDrawings).catch(drawingError);
+  };
+  const deleteDrawing = useCallback(
+    (id: number) => {
+      setSelectedDrawing((s) => (s === id ? null : s));
+      setDrawings((ds) => ds.filter((d) => d.id !== id));
+      api.deleteDrawing(id).then(refreshDrawings).catch(drawingError);
+    },
+    [refreshDrawings, drawingError],
+  );
+
+  // Keyboard: Esc cancels/deselects, Delete removes the selected drawing, Alt+I/T/H/V pick a tool.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+      if (e.key === "Escape") {
+        setTool(null);
+        setSelectedDrawing(null);
+      } else if ((e.key === "Delete" || e.key === "Backspace") && !typing && selectedDrawing != null) {
+        e.preventDefault();
+        deleteDrawing(selectedDrawing);
+      } else if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const t = LINE_TOOLS.find((x) => x.key === e.code);
+        if (t) {
+          e.preventDefault();
+          setTool(t.kind);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedDrawing, deleteDrawing]);
+
   const openAlert = () => {
     setSideTab("alerts");
     setAlertPrefill((a) => ({ ticker: active, price: live.quotes[active]?.last ?? 0, nonce: (a?.nonce ?? 0) + 1 }));
@@ -347,7 +413,21 @@ export default function App() {
         onLayout={chooseLayout}
       />
       <div className="flex min-h-0 flex-1">
-        <LeftRail crosshair={crosshair} onCrosshair={setCrosshair} controls={controls.current[activeIdx]} />
+        <LeftRail
+          crosshair={crosshair}
+          onCrosshair={setCrosshair}
+          controls={controls.current[activeIdx]}
+          tool={tool}
+          onTool={setTool}
+          magnet={magnet}
+          onMagnet={setMagnet}
+          activeTicker={active}
+          onRemoveDrawings={() => {
+            setSelectedDrawing(null);
+            setDrawings((ds) => ds.filter((d) => d.ticker !== active));
+            api.deleteSymbolDrawings(active).then(refreshDrawings).catch(drawingError);
+          }}
+        />
         <main className="flex min-w-0 flex-1 flex-col">
           <div
             className={`grid min-h-0 flex-1 gap-px bg-line ${maximized != null ? GRID["1"] : GRID[layout.layout]}`}
@@ -365,6 +445,7 @@ export default function App() {
                   data-ticker={p.ticker}
                   data-timeframe={p.timeframe}
                   onMouseDownCapture={() => activate(i)}
+                  onPointerDown={() => setSelectedDrawing(null)}
                   onFocusCapture={() => activate(i)}
                   className={`relative flex min-h-0 min-w-0 flex-col bg-bg ${hidden ? "hidden" : ""} ${
                     visible > 1 && isActive ? "outline-2 -outline-offset-2 outline-accent outline" : ""
@@ -384,6 +465,14 @@ export default function App() {
                     controls={controls.current[i]}
                     range={ranges[i]}
                     onQuickTrade={(side) => prefillTicket(p.ticker, side)}
+                    drawings={drawings.filter((d) => d.ticker === p.ticker)}
+                    tool={tool}
+                    magnet={magnet}
+                    selectedDrawing={selectedDrawing}
+                    onCreateDrawing={(kind, pts) => createDrawing(p.ticker, kind, pts)}
+                    onMoveDrawing={moveDrawing}
+                    onSelectDrawing={setSelectedDrawing}
+                    onDeleteDrawing={deleteDrawing}
                   />
                   {visible > 1 && (
                     <button
@@ -446,6 +535,7 @@ export default function App() {
                 label: `Alerts${alerts.some((a) => a.status === "active") ? ` (${alerts.filter((a) => a.status === "active").length})` : ""}`,
               },
               { id: "screener", label: "Screener" },
+              { id: "drawings", label: `Drawings${drawings.length ? ` (${drawings.length})` : ""}` },
             ]}
           />
           {sideTab === "watchlist" && (
@@ -473,6 +563,18 @@ export default function App() {
             />
           )}
           {sideTab === "screener" && <Screener quotes={live.quotes} sectors={config.sectors} onSymbol={selectSymbol} />}
+          {sideTab === "drawings" && (
+            <DrawingsList
+              drawings={drawings}
+              active={active}
+              selected={selectedDrawing}
+              onSelect={(d) => {
+                if (d.ticker !== active) selectSymbol(d.ticker);
+                setSelectedDrawing(d.id);
+              }}
+              onDelete={deleteDrawing}
+            />
+          )}
         </aside>
       </div>
       <datalist id="cv-symbols">

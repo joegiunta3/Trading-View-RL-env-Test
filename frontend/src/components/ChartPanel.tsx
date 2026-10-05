@@ -7,7 +7,8 @@ import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "rea
 import { fmtBarTime, fmtDay, fmtInt, fmtMonth, fmtPct, fmtPrice, fmtSigned, toneClass } from "../format";
 import { sma } from "../indicators";
 import { smaColors, theme } from "../theme";
-import type { Bar, Indicator, Quote } from "../types";
+import type { Bar, Drawing, DrawingKind, DrawingPoint, Indicator, Quote } from "../types";
+import { DrawingLayer, type Geometry } from "./DrawingLayer";
 
 echarts.use([
   CandlestickChart,
@@ -35,6 +36,10 @@ type SmaLine = { period: number; color: string; values: (number | null)[] };
 type Window = { start: number; end: number };
 
 const VISIBLE_BARS = 150;
+const FUTURE_SLOTS = 60; // empty categories right of the last bar, for drawing into the future
+const RIGHT_PAD = 8; // empty bars shown right of the last bar by default
+const TF_SECONDS: Record<string, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1D": 86400 };
+const GRID = { left: 10, right: 72, top: 16, bottom: 28 };
 const MIN_SPAN = 10;
 const LABEL_PX = 84; // target spacing between time-axis labels
 // Compact legend (no company name, no Sell/Buy boxes) in narrow or short panes.
@@ -57,6 +62,14 @@ type Props = {
   controls: MutableRefObject<ChartControls | null>;
   range: RangeRequest | null;
   onQuickTrade: (side: "buy" | "sell") => void;
+  drawings: Drawing[];
+  tool: DrawingKind | null;
+  magnet: boolean;
+  selectedDrawing: number | null;
+  onCreateDrawing: (kind: DrawingKind, points: DrawingPoint[]) => void;
+  onMoveDrawing: (id: number, points: DrawingPoint[]) => void;
+  onSelectDrawing: (id: number | null) => void;
+  onDeleteDrawing: (id: number) => void;
 };
 
 export function ChartPanel(p: Props) {
@@ -72,6 +85,7 @@ export function ChartPanel(p: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [, setGeomTick] = useState(0); // bumped after each chart render so drawings re-project
 
   const daily = timeframe === "1D";
   const dailyRef = useRef(daily);
@@ -93,6 +107,10 @@ export function ChartPanel(p: Props) {
       const info = (e as { axesInfo?: { axisDim: string; value: number }[] }).axesInfo ?? [];
       const x = info.find((a) => a.axisDim === "x");
       setHover(x ? Number(x.value) : null);
+    });
+    let raf = 0;
+    c.on("rendered", () => {
+      if (!raf) raf = requestAnimationFrame(() => ((raf = 0), setGeomTick((t) => t + 1)));
     });
     c.on("datazoom", () => {
       const dz = (c.getOption() as { dataZoom?: { startValue: number; endValue: number }[] }).dataZoom?.[0];
@@ -126,17 +144,17 @@ export function ChartPanel(p: Props) {
     const fresh = key !== viewKey.current || prevLen.current === 0;
     let w: Window;
     if (fresh) {
-      w = { start: Math.max(0, n - VISIBLE_BARS), end: Math.max(0, n - 1) };
+      w = { start: Math.max(0, n - VISIBLE_BARS), end: Math.max(0, n - 1 + RIGHT_PAD) };
     } else {
       const old = win.current;
       const following = old.end >= prevLen.current - 1;
       const shift = following ? n - prevLen.current : 0;
-      w = { start: Math.max(0, old.start + shift), end: Math.min(n - 1, old.end + shift) };
+      w = { start: Math.max(0, old.start + shift), end: Math.min(n - 1 + FUTURE_SLOTS, old.end + shift) };
     }
     const r = p.range;
     if (r && r.nonce !== appliedRange.current && p.barsKey === `${r.ticker}|${r.tf}` && n > 0) {
       appliedRange.current = r.nonce;
-      w = { start: rangeStart(bars, r), end: n - 1 };
+      w = { start: rangeStart(bars, r), end: n - 1 + RIGHT_PAD };
     }
     viewKey.current = key;
     prevLen.current = n;
@@ -155,16 +173,17 @@ export function ChartPanel(p: Props) {
   useEffect(() => {
     const go = (w: Window) => chart.current?.dispatchAction({ type: "dataZoom", startValue: w.start, endValue: w.end });
     const n = () => barsRef.current.length;
+    const maxEnd = () => n() - 1 + FUTURE_SLOTS;
     const zoom = (factor: number) => {
       const { start, end } = win.current;
-      const span = Math.min(n(), Math.max(MIN_SPAN, Math.round((end - start + 1) * factor)));
+      const span = Math.min(maxEnd() + 1, Math.max(MIN_SPAN, Math.round((end - start + 1) * factor)));
       go({ start: Math.max(0, end - span + 1), end });
     };
     const pan = (dir: number) => {
       const { start, end } = win.current;
       const span = end - start;
       const step = Math.max(1, Math.round((span + 1) * 0.25)) * dir;
-      const s = Math.min(Math.max(0, start + step), Math.max(0, n() - 1 - span));
+      const s = Math.min(Math.max(0, start + step), Math.max(0, maxEnd() - span));
       go({ start: s, end: s + span });
     };
     p.controls.current = {
@@ -172,7 +191,7 @@ export function ChartPanel(p: Props) {
       zoomOut: () => zoom(1.6),
       panLeft: () => pan(-1),
       panRight: () => pan(1),
-      reset: () => go({ start: Math.max(0, n() - VISIBLE_BARS), end: Math.max(0, n() - 1) }),
+      reset: () => go({ start: Math.max(0, n() - VISIBLE_BARS), end: Math.max(0, n() - 1 + RIGHT_PAD) }),
     };
   }, [p.controls]);
 
@@ -214,7 +233,21 @@ export function ChartPanel(p: Props) {
         collapsed={collapsed}
         onCollapse={setCollapsed}
       />
-      <div ref={el} className="min-h-0 flex-1" data-testid="chart-canvas" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={el} className="absolute inset-0" data-testid="chart-canvas" />
+        <DrawingLayer
+          geom={geometry(chart.current, bars, win.current, timeframe)}
+          drawings={p.drawings}
+          tool={p.tool}
+          magnet={p.magnet}
+          daily={daily}
+          selectedId={p.selectedDrawing}
+          onCreate={p.onCreateDrawing}
+          onMove={p.onMoveDrawing}
+          onSelect={p.onSelectDrawing}
+          onDelete={p.onDeleteDrawing}
+        />
+      </div>
       <ChartNav controls={p.controls} />
       {p.overlay && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
@@ -368,6 +401,24 @@ function Legend(
   );
 }
 
+/** Plot rectangle and data<->pixel mapping for the drawing layer (null until rendered). */
+function geometry(c: echarts.ECharts | null, bars: Bar[], w: Window, tf: string): Geometry | null {
+  if (!c || c.isDisposed() || bars.length === 0) return null;
+  const width = c.getWidth();
+  const height = c.getHeight();
+  if (width === 0 || height === 0) return null;
+  return {
+    rect: { x: GRID.left, y: GRID.top, width: width - GRID.left - GRID.right, height: height - GRID.top - GRID.bottom },
+    start: w.start,
+    end: w.end,
+    bars,
+    tfSeconds: TF_SECONDS[tf] ?? 60,
+    futureSlots: FUTURE_SLOTS,
+    priceToY: (price) => Number(c.convertToPixel({ yAxisIndex: 0 }, price)),
+    yToPrice: (y) => Number(c.convertFromPixel({ yAxisIndex: 0 }, y)),
+  };
+}
+
 function rangeStart(bars: Bar[], r: RangeRequest): number {
   let from = r.fromDate;
   if (r.sessions != null) {
@@ -467,11 +518,11 @@ function buildOption(
         },
       },
     },
-    grid: [{ left: 10, right: 72, top: 16, bottom: 28 }],
+    grid: [GRID],
     xAxis: [
       {
         type: "category",
-        data: bars.map((_, i) => String(i)),
+        data: Array.from({ length: bars.length + FUTURE_SLOTS }, (_, i) => String(i)),
         boundaryGap: true,
         axisLine: { lineStyle: { color: theme.border } },
         axisTick: { show: false },

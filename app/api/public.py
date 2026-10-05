@@ -72,6 +72,21 @@ class PaneIn(BaseModel):
     indicators: list[Indicator] | None = None
 
 
+class DrawingPoint(BaseModel):
+    time: int
+    price: float
+
+
+class DrawingIn(BaseModel):
+    ticker: str
+    kind: str
+    points: list[DrawingPoint]
+
+
+class DrawingMove(BaseModel):
+    points: list[DrawingPoint]
+
+
 MAX_SUBSCRIPTIONS = 4
 
 
@@ -218,6 +233,27 @@ def create_public_app(holder: EnvHolder, frontend_dist: Path | None = FRONTEND_D
     def delete_alert(alert_id: int) -> dict:
         ep().delete_alert(alert_id)
         return {"ok": True}
+
+    @app.get("/api/drawings")
+    def list_drawings(ticker: str | None = None) -> list[dict]:
+        return ep().list_drawings(ticker)
+
+    @app.post("/api/drawings")
+    def create_drawing(body: DrawingIn) -> dict:
+        return ep().create_drawing(body.ticker, body.kind, [p.model_dump() for p in body.points])
+
+    @app.patch("/api/drawings/{drawing_id}")
+    def move_drawing(drawing_id: int, body: DrawingMove) -> dict:
+        return ep().move_drawing(drawing_id, [p.model_dump() for p in body.points])
+
+    @app.delete("/api/drawings/{drawing_id}")
+    def delete_drawing(drawing_id: int) -> dict:
+        ep().delete_drawing(drawing_id)
+        return {"ok": True}
+
+    @app.delete("/api/drawings")
+    def delete_symbol_drawings(ticker: str) -> dict:
+        return {"deleted": ep().delete_symbol_drawings(ticker)}
 
     @app.get("/api/layout")
     def get_layout() -> dict:

@@ -99,7 +99,7 @@ test("intraday charts include prior sessions, even at the open", async ({ app, r
     expect(all.filter((b) => b.date !== "2026-01-15").length).toBeGreaterThan(400);
     await expect(app.getByTestId("chart-canvas")).toHaveAttribute("data-bars", String(all.length));
     const [start, end] = await chartWindow(app);
-    expect(end).toBe(all.length - 1);
+    expect(end).toBe(all.length - 1 + 8); // last bar plus 8 empty bars of space on the right
     expect(end - start + 1).toBeGreaterThanOrEqual(100); // a full screen of candles
   }
 });
@@ -142,7 +142,7 @@ test("range presets switch timeframe and window", async ({ app, request }) => {
 
   await app.getByTestId("range-3M").click();
   await expect(app.getByTestId("tf-1D")).toHaveAttribute("aria-pressed", "true");
-  await expect.poll(async () => (await chartWindow(app)).join("-")).toBe("0-60");
+  await expect.poll(async () => (await chartWindow(app)).join("-")).toBe("0-68"); // 61 daily bars + 8 empty
 });
 
 test("Sell/Buy boxes in the legend prefill the order ticket", async ({ app }) => {

@@ -112,6 +112,14 @@ CREATE TABLE chart_panes (           -- the four chart panes; layout decides how
     timeframe TEXT NOT NULL,
     indicators_json TEXT NOT NULL
 );
+CREATE TABLE drawings (             -- chart drawings, per symbol (shown on every pane of that symbol)
+    id INTEGER PRIMARY KEY,
+    symbol_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,              -- info_line | trendline | horizontal_line | vertical_line
+    points_json TEXT NOT NULL,       -- [{"time": bar epoch seconds, "price": cents}, ...]
+    created_sim_ts INTEGER NOT NULL,
+    updated_sim_ts INTEGER NOT NULL
+);
 CREATE TABLE ui_state (             -- keys: layout ("1".."4"), active_pane ("0".."3")
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

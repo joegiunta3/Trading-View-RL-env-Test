@@ -19,7 +19,7 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 - No real accounts, real money, real market data, or real network calls. All prices, volumes and scenarios are synthetic. Ticker symbols and company names are real (names only; see §5).
 - No ads, promos, upsell banners or login walls. The app is a clean workspace.
 - No copying of third-party code, logos, icons, fonts, copy text or images.
-- Not in v0.1: news feed, drawing tools, Pine-style scripting, options, margin, mobile layout. (Multi-chart layouts were added in v0.2; see §6.)
+- Not in v0.1: news feed, Pine-style scripting, options, margin, mobile layout. (Multi-chart layouts and line drawing tools were added in v0.2; see §6.)
 
 ## 2. Visual identity and legal guardrails
 
@@ -68,6 +68,7 @@ The product name lives in ONE constant (`APP_NAME` in `config.py` and `frontend/
 Layout: top toolbar (symbol search, timeframe buttons, indicator menu, clock), left slim toolbar, center chart, right sidebar (watchlist / alerts / screener tabs), bottom panel (Positions, Orders, History, P&L).
 
 1. **Chart.** Candlesticks, volume histogram, timeframes 1m, 5m, 15m, 1h, 1D. Indicators: SMA (user-set period, multiple allowed) and Volume only. A DOM legend shows O/H/L/C, change, volume and SMA values for the hovered (or latest) bar, so lookup tasks can be done by reading text, not just pixels. Crosshair, zoom and pan. Chart settings (symbol, timeframe, indicators) are saved server-side per pane.
+   - **Line drawing tools (v0.2):** a "Lines" flyout in the left toolbar with Info line, Trendline, Horizontal line and Vertical line (shortcuts Alt+I/T/H/V). Points are anchored to (bar time, price), so drawings survive zoom, pan and timeframe changes, and can be placed in the empty space right of the last bar. The Info line shows price change ($, %, cents), bar count and time span, pixel distance and angle. Drawings belong to the symbol (shown on every pane showing it). Select to drag handles or move; Delete removes; a magnet toggle snaps points to the bar's O/H/L/C; "Remove all drawings" clears the active symbol. A "Drawings" sidebar tab lists every drawing as text.
    - **Layouts (v0.2):** a "Layout setup" toolbar button offers 1 chart, 2 side by side, 3 columns, or a 2×2 grid. Each pane has its own symbol, timeframe and indicators. Clicking a pane makes it active; the toolbar, watchlist, screener, positions and order ticket act on the active pane. Shrinking a layout hides panes but keeps their settings; any pane can be maximized and restored. No cross-pane sync.
 2. **Clock display.** Visible sim time (HH:MM:SS) and market status in the toolbar.
 3. **Watchlists.** Create, rename, delete watchlists; add/remove tickers; rows show last, change, % change. One default list.
@@ -100,6 +101,7 @@ Login: auto-signed in as a single seeded account. Seeded starting positions may 
 - `trades(id, order_id, symbol_id, qty, price, sim_ts)`
 - `watchlists(id, name)`; `watchlist_items(watchlist_id, symbol_id, position)`
 - `alerts(id, symbol_id, condition, price, note, enabled, triggered_sim_ts)`
+- `drawings(id, symbol_id, kind, points_json, created_sim_ts, updated_sim_ts)` (v0.2): points are `{time: bar epoch seconds, price: cents}`
 - `chart_panes(pane_index 0-3, symbol_id, timeframe, indicators_json)` and `ui_state(key, value)` with `layout` ("1"-"4") and `active_pane` (v0.2; replaces per-symbol `chart_prefs`)
 - `action_log(id, wall_ts, sim_ts, endpoint, payload)` for grading and trace review (not visible in the UI)
 
