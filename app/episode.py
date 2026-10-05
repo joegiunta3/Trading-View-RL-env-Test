@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from app import indicators as indicators_lib
 from app.clock import ClockError, ClockMode, ClockState, SimClock
 from app.config import SESSION_DATES, SESSION_SECONDS, START_CASH_CENTS, TIME_SCALE
 from app.db import new_episode_db, state_hash
@@ -38,8 +39,20 @@ DEFAULT_TIMEFRAME = "5m"
 DEFAULT_INDICATORS = [{"type": "volume"}]
 LAYOUTS = {"1": 1, "2": 2, "3": 3, "4": 4}  # layout id -> visible panes
 PANES = 4
-MAX_SMA_PERIOD = 500
 MAX_INDICATORS = 10
+MAX_LOWER_PANES = 3
+LOWER_PANE_INDICATORS = ("rsi", "macd", "kdj")
+# type -> {param: (default, min, max, is_int)}
+INDICATOR_PARAMS: dict[str, dict[str, tuple]] = {
+    "volume": {},
+    "sma": {"period": (20, 1, 500, True)},
+    "ema": {"period": (20, 1, 500, True)},
+    "bb": {"period": (20, 2, 500, True), "stddev": (2.0, 0.5, 5.0, False)},
+    "vwap": {},
+    "rsi": {"period": (14, 2, 100, True)},
+    "macd": {"fast": (12, 1, 100, True), "slow": (26, 2, 200, True), "signal": (9, 1, 100, True)},
+    "kdj": {"period": (9, 1, 100, True), "k": (3, 1, 20, True), "d": (3, 1, 20, True)},
+}
 MAX_NAME_LEN = 40
 MAX_NOTE_LEN = 200
 
@@ -609,6 +622,27 @@ class Episode:
             raise EngineError(f"Note must be at most {MAX_NOTE_LEN} characters.", 422)
         return note
 
+    @_locked
+    def indicator_values(self, ticker: str, tf: str, indicator: dict) -> dict:
+        """Harness-only: indicator series for a symbol/timeframe up to now (same math as the UI)."""
+        ind = self._clean_indicators([indicator])[0]
+        bars = self.bars(ticker, tf)
+        series = indicators_lib.rounded(indicators_lib.compute(bars, ind))
+        return {
+            "ticker": self._ticker(self._sid(ticker)),
+            "timeframe": tf,
+            "indicator": ind,
+            "bars": [
+                {
+                    "time": b["time"],
+                    "date": b["date"],
+                    "label": b["label"],
+                    **{k: v[i] for k, v in series.items()},
+                }
+                for i, b in enumerate(bars)
+            ],
+        }
+
     # --- drawings ----------------------------------------------------------------------------
 
     @_locked
@@ -770,33 +804,37 @@ class Episode:
 
     @staticmethod
     def _clean_indicators(indicators: list[dict]) -> list[dict]:
+        """Validate indicator configs, fill defaults, and return them in canonical form."""
         if len(indicators) > MAX_INDICATORS:
             raise EngineError(f"At most {MAX_INDICATORS} indicators.", 422)
         out: list[dict] = []
         for ind in indicators:
             kind = ind.get("type")
-            if kind == "volume":
-                if {"type": "volume"} in out:
-                    raise EngineError("Volume can only be added once.", 422)
-                out.append({"type": "volume"})
-            elif kind == "sma":
-                period = ind.get("period")
-                if (
-                    not isinstance(period, int)
-                    or isinstance(period, bool)
-                    or not 1 <= period <= MAX_SMA_PERIOD
-                ):
+            spec = INDICATOR_PARAMS.get(kind)
+            if spec is None:
+                raise EngineError(
+                    f"Unknown indicator {kind!r}. Available: {', '.join(INDICATOR_PARAMS)}.", 422
+                )
+            clean: dict = {"type": kind}
+            for name, (default, lo, hi, is_int) in spec.items():
+                v = ind.get(name, default)
+                ok_type = isinstance(v, int) if is_int else isinstance(v, int | float)
+                if isinstance(v, bool) or not ok_type or not lo <= v <= hi:
+                    what = "a whole number" if is_int else "a number"
                     raise EngineError(
-                        f"SMA period must be a whole number from 1 to {MAX_SMA_PERIOD}.", 422
+                        f"{kind.upper()} {name} must be {what} from {lo} to {hi}.", 422
                     )
-                if {"type": "sma", "period": period} in out:
-                    raise EngineError(f"SMA {period} is already on this chart.", 422)
-                out.append({"type": "sma", "period": period})
-            else:
-                raise EngineError(f"Unknown indicator {kind!r}. Available: sma, volume.", 422)
+                clean[name] = v if is_int else float(v)
+            if kind == "macd" and clean["fast"] >= clean["slow"]:
+                raise EngineError("MACD fast length must be shorter than slow length.", 422)
+            if clean in out:
+                raise EngineError(f"That {kind.upper()} is already on this chart.", 422)
+            out.append(clean)
+        if sum(i["type"] in LOWER_PANE_INDICATORS for i in out) > MAX_LOWER_PANES:
+            raise EngineError(
+                f"At most {MAX_LOWER_PANES} lower panes (RSI, MACD, KDJ) per chart.", 422
+            )
         return out
-
-    # --- harness-only views ---------------------------------------------------------------------
 
     @_locked
     def state(self) -> dict:

@@ -5,8 +5,8 @@ import { CanvasRenderer } from "echarts/renderers";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Minus, Plus, RotateCcw } from "lucide-react";
 import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "react";
 import { fmtBarTime, fmtDay, fmtInt, fmtMonth, fmtPct, fmtPrice, fmtSigned, toneClass } from "../format";
-import { sma } from "../indicators";
-import { smaColors, theme } from "../theme";
+import { LOWER_PANE, type Series, compute, indicatorKey, indicatorLabel } from "../indicators";
+import { indicatorColors, smaColors, theme } from "../theme";
 import type { Bar, Drawing, DrawingKind, DrawingPoint, Indicator, Quote } from "../types";
 import { DrawingLayer, type Geometry } from "./DrawingLayer";
 
@@ -32,14 +32,17 @@ export type ChartControls = {
 /** Ask the chart to show a range once bars for (ticker, tf) are loaded. */
 export type RangeRequest = { ticker: string; tf: string; sessions?: number; fromDate?: string; nonce: number };
 
-type SmaLine = { period: number; color: string; values: (number | null)[] };
 type Window = { start: number; end: number };
+/** One plotted line of an indicator, with the legend test id and label for its value. */
+type Line = { id: string; label: string; values: Series; color: string; dashed?: boolean };
+type Study = { key: string; label: string; ind: Indicator; lines: Line[]; histogram?: Series };
 
 const VISIBLE_BARS = 150;
 const FUTURE_SLOTS = 60; // empty categories right of the last bar, for drawing into the future
 const RIGHT_PAD = 8; // empty bars shown right of the last bar by default
 const TF_SECONDS: Record<string, number> = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "1D": 86400 };
 const GRID = { left: 10, right: 72, top: 16, bottom: 28 };
+const SUB_GAP = 8; // space above each lower pane (for its legend)
 const MIN_SPAN = 10;
 const LABEL_PX = 84; // target spacing between time-axis labels
 // Compact legend (no company name, no Sell/Buy boxes) in narrow or short panes.
@@ -72,6 +75,68 @@ type Props = {
   onDeleteDrawing: (id: number) => void;
 };
 
+/** Price overlays and lower-pane studies for the given indicator configs. */
+function buildStudies(bars: Bar[], indicators: Indicator[]): { overlays: Study[]; lowers: Study[] } {
+  const overlays: Study[] = [];
+  const lowers: Study[] = [];
+  let color = 0;
+  for (const ind of indicators) {
+    if (ind.type === "volume") continue;
+    const key = indicatorKey(ind);
+    const label = indicatorLabel(ind);
+    const out = compute(bars, ind);
+    if (!LOWER_PANE.has(ind.type)) {
+      const c = smaColors[color++ % smaColors.length];
+      const lines: Line[] =
+        ind.type === "bb"
+          ? [
+              { id: `${key}-upper`, label: "U", values: out.upper, color: c, dashed: true },
+              { id: `${key}-middle`, label: "M", values: out.middle, color: c },
+              { id: `${key}-lower`, label: "L", values: out.lower, color: c, dashed: true },
+            ]
+          : [{ id: key, label: "", values: Object.values(out)[0], color: c }];
+      overlays.push({ key, label, ind, lines });
+    } else if (ind.type === "rsi") {
+      lowers.push({ key, label, ind, lines: [{ id: key, label: "", values: out.rsi, color: indicatorColors.rsi }] });
+    } else if (ind.type === "macd") {
+      lowers.push({
+        key,
+        label,
+        ind,
+        lines: [
+          { id: `${key}-macd`, label: "MACD", values: out.macd, color: indicatorColors.macd },
+          { id: `${key}-signal`, label: "Signal", values: out.signal, color: indicatorColors.signal },
+          { id: `${key}-histogram`, label: "Hist", values: out.histogram, color: theme.muted },
+        ],
+        histogram: out.histogram,
+      });
+    } else if (ind.type === "kdj") {
+      lowers.push({
+        key,
+        label,
+        ind,
+        lines: [
+          { id: `${key}-k`, label: "K", values: out.k, color: indicatorColors.k },
+          { id: `${key}-d`, label: "D", values: out.d, color: indicatorColors.d },
+          { id: `${key}-j`, label: "J", values: out.j, color: indicatorColors.j },
+        ],
+      });
+    }
+  }
+  return { overlays, lowers };
+}
+
+/** Pixel layout of the main price grid and each lower pane, from the chart height. */
+function paneLayout(height: number, lowerCount: number) {
+  const sub = lowerCount ? Math.max(56, Math.min(130, Math.round(height * 0.17))) : 0;
+  const mainBottom = GRID.bottom + lowerCount * sub;
+  const lowers = Array.from({ length: lowerCount }, (_, i) => {
+    const top = height - GRID.bottom - (lowerCount - i) * sub + SUB_GAP;
+    return { top, height: sub - SUB_GAP };
+  });
+  return { mainBottom, mainHeight: height - GRID.top - mainBottom, lowers };
+}
+
 export function ChartPanel(p: Props) {
   const { bars, indicators, crosshair, timeframe } = p;
   const el = useRef<HTMLDivElement>(null);
@@ -85,18 +150,17 @@ export function ChartPanel(p: Props) {
   const [hover, setHover] = useState<number | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [narrow, setNarrow] = useState(false);
+  const [size, setSize] = useState({ w: 0, h: 0 });
   const [, setGeomTick] = useState(0); // bumped after each chart render so drawings re-project
 
   const daily = timeframe === "1D";
   const dailyRef = useRef(daily);
   dailyRef.current = daily;
+  const lowerCountRef = useRef(0);
   const showVolume = indicators.some((i) => i.type === "volume");
-  const smas: SmaLine[] = useMemo(() => {
-    const closes = bars.map((b) => b.c);
-    return indicators
-      .filter((i): i is { type: "sma"; period: number } => i.type === "sma")
-      .map((i, n) => ({ period: i.period, color: smaColors[n % smaColors.length], values: sma(closes, i.period) }));
-  }, [bars, indicators]);
+  const studies = useMemo(() => buildStudies(bars, indicators), [bars, indicators]);
+  lowerCountRef.current = studies.lowers.length;
+  const layout = paneLayout(size.h, studies.lowers.length);
 
   // Create the chart once.
   useEffect(() => {
@@ -117,11 +181,14 @@ export function ChartPanel(p: Props) {
       if (!dz) return;
       win.current = { start: dz.startValue, end: dz.endValue };
       if (el.current) el.current.dataset.window = `${dz.startValue}-${dz.endValue}`;
-      c.setOption({ xAxis: [axisLabels(barsRef.current, dailyRef.current, win.current, c.getWidth())] });
+      const labels = axisLabels(barsRef.current, dailyRef.current, win.current, c.getWidth());
+      const n = lowerCountRef.current;
+      c.setOption({ xAxis: Array.from({ length: n + 1 }, (_, i) => (i === n ? labels : {})) });
     });
     const ro = new ResizeObserver(() => {
       c.resize();
       setNarrow(c.getWidth() < NARROW_PX || c.getHeight() < SHORT_PX);
+      setSize({ w: c.getWidth(), h: c.getHeight() });
     });
     ro.observe(el.current);
     const node = el.current;
@@ -138,9 +205,10 @@ export function ChartPanel(p: Props) {
   // Render data, keeping the user's zoom window (and following the live edge).
   useEffect(() => {
     const c = chart.current;
-    if (!c) return;
+    if (!c || size.h === 0) return;
     const n = bars.length;
-    const key = `${p.barsKey}|${showVolume}|${smas.map((s) => s.period).join(",")}|${crosshair}`;
+    const studyKeys = [...studies.overlays, ...studies.lowers].map((s) => s.key).join(",");
+    const key = `${p.barsKey}|${showVolume}|${studyKeys}|${crosshair}`;
     const fresh = key !== viewKey.current || prevLen.current === 0;
     let w: Window;
     if (fresh) {
@@ -163,11 +231,11 @@ export function ChartPanel(p: Props) {
       el.current.dataset.window = `${w.start}-${w.end}`;
       el.current.dataset.bars = String(n);
     }
-    c.setOption(buildOption(bars, smas, showVolume, crosshair, daily, w, c.getWidth()), {
+    c.setOption(buildOption(bars, studies, showVolume, crosshair, daily, w, size.w, size.h), {
       notMerge: fresh,
       lazyUpdate: true,
     });
-  }, [bars, smas, showVolume, crosshair, daily, p.barsKey, p.range]);
+  }, [bars, studies, showVolume, crosshair, daily, p.barsKey, p.range, size]);
 
   // Navigation used by the left rail, the on-chart buttons and the keyboard.
   useEffect(() => {
@@ -226,7 +294,7 @@ export function ChartPanel(p: Props) {
       <Legend
         {...p}
         idx={idx}
-        smas={smas}
+        overlays={studies.overlays}
         showVolume={showVolume}
         daily={daily}
         narrow={narrow}
@@ -235,8 +303,11 @@ export function ChartPanel(p: Props) {
       />
       <div className="relative min-h-0 flex-1">
         <div ref={el} className="absolute inset-0" data-testid="chart-canvas" />
+        {studies.lowers.map((s, i) =>
+          layout.lowers[i] ? <LowerLegend key={s.key} study={s} idx={idx} top={layout.lowers[i].top - SUB_GAP + 1} /> : null,
+        )}
         <DrawingLayer
-          geom={geometry(chart.current, bars, win.current, timeframe)}
+          geom={geometry(chart.current, bars, win.current, timeframe, layout.mainBottom)}
           drawings={p.drawings}
           tool={p.tool}
           magnet={p.magnet}
@@ -248,7 +319,7 @@ export function ChartPanel(p: Props) {
           onDelete={p.onDeleteDrawing}
         />
       </div>
-      <ChartNav controls={p.controls} />
+      <ChartNav controls={p.controls} bottom={layout.mainBottom + 12} />
       {p.overlay && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
           <div
@@ -264,7 +335,29 @@ export function ChartPanel(p: Props) {
   );
 }
 
-function ChartNav({ controls }: { controls: MutableRefObject<ChartControls | null> }) {
+const fmtValue = (v: number | null | undefined) => (v == null ? "—" : fmtPrice(Math.abs(v) < 0.005 ? 0 : v));
+
+function LowerLegend({ study, idx, top }: { study: Study; idx: number; top: number }) {
+  return (
+    <div
+      className="pointer-events-none absolute left-3 z-10 flex items-baseline gap-2 text-[11px]"
+      style={{ top }}
+      data-testid={`lower-${study.key}`}
+    >
+      <span className="font-medium text-text">{study.label}</span>
+      {study.lines.map((l) => (
+        <span key={l.id} className="inline-flex items-baseline gap-0.5">
+          {l.label && <span className="text-muted">{l.label}</span>}
+          <span className="num" style={{ color: l.color }} data-testid={`legend-${l.id}`}>
+            {fmtValue(l.values[idx])}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ChartNav({ controls, bottom }: { controls: MutableRefObject<ChartControls | null>; bottom: number }) {
   const btn = (label: string, testId: string, fn: keyof ChartControls, icon: React.ReactNode) => (
     <button
       type="button"
@@ -279,7 +372,8 @@ function ChartNav({ controls }: { controls: MutableRefObject<ChartControls | nul
   );
   return (
     <div
-      className="absolute bottom-10 left-1/2 z-10 flex -translate-x-1/2 gap-1 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+      className="absolute left-1/2 z-10 flex -translate-x-1/2 gap-1 opacity-60 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+      style={{ bottom }}
       data-testid="chart-nav"
     >
       {btn("Zoom out", "chart-zoom-out", "zoomOut", <Minus size={14} />)}
@@ -294,7 +388,7 @@ function ChartNav({ controls }: { controls: MutableRefObject<ChartControls | nul
 function Legend(
   p: Props & {
     idx: number;
-    smas: SmaLine[];
+    overlays: Study[];
     showVolume: boolean;
     daily: boolean;
     narrow: boolean;
@@ -348,40 +442,47 @@ function Legend(
       </div>
       {!p.collapsed && (
         <>
-          {!p.narrow && <div className="pointer-events-auto flex items-center gap-2">
-            <button
-              type="button"
-              data-testid="legend-sell"
-              disabled={p.closed || !q}
-              onClick={() => p.onQuickTrade("sell")}
-              className="flex min-w-20 flex-col items-center rounded border border-down/60 bg-bg/80 px-2.5 py-0.5 leading-tight text-down hover:bg-down-soft disabled:opacity-40"
-            >
-              <span className="num text-[13px]">{fmtPrice(q?.bid)}</span>
-              <span className="text-[10px] font-semibold tracking-wider">SELL</span>
-            </button>
-            <span className="num text-[11px] text-muted" title="Spread">
-              {q ? (q.ask - q.bid).toFixed(2) : "—"}
-            </span>
-            <button
-              type="button"
-              data-testid="legend-buy"
-              disabled={p.closed || !q}
-              onClick={() => p.onQuickTrade("buy")}
-              className="flex min-w-20 flex-col items-center rounded border border-accent/70 bg-bg/80 px-2.5 py-0.5 leading-tight text-accent hover:bg-accent-soft disabled:opacity-40"
-            >
-              <span className="num text-[13px]">{fmtPrice(q?.ask)}</span>
-              <span className="text-[10px] font-semibold tracking-wider">BUY</span>
-            </button>
-          </div>}
-          {(p.showVolume || p.smas.length > 0) && (
-            <div className="flex flex-wrap items-baseline gap-x-3">
+          {!p.narrow && (
+            <div className="pointer-events-auto flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="legend-sell"
+                disabled={p.closed || !q}
+                onClick={() => p.onQuickTrade("sell")}
+                className="flex min-w-20 flex-col items-center rounded border border-down/60 bg-bg/80 px-2.5 py-0.5 leading-tight text-down hover:bg-down-soft disabled:opacity-40"
+              >
+                <span className="num text-[13px]">{fmtPrice(q?.bid)}</span>
+                <span className="text-[10px] font-semibold tracking-wider">SELL</span>
+              </button>
+              <span className="num text-[11px] text-muted" title="Spread">
+                {q ? (q.ask - q.bid).toFixed(2) : "—"}
+              </span>
+              <button
+                type="button"
+                data-testid="legend-buy"
+                disabled={p.closed || !q}
+                onClick={() => p.onQuickTrade("buy")}
+                className="flex min-w-20 flex-col items-center rounded border border-accent/70 bg-bg/80 px-2.5 py-0.5 leading-tight text-accent hover:bg-accent-soft disabled:opacity-40"
+              >
+                <span className="num text-[13px]">{fmtPrice(q?.ask)}</span>
+                <span className="text-[10px] font-semibold tracking-wider">BUY</span>
+              </button>
+            </div>
+          )}
+          {(p.showVolume || p.overlays.length > 0) && (
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
               {p.showVolume && bar && item("Vol", fmtInt(bar.v), "legend-vol", "text-text")}
-              {p.smas.map((s) => (
-                <span key={s.period} className="inline-flex items-baseline gap-1">
-                  <span style={{ color: s.color }}>SMA {s.period}</span>
-                  <span className="num" style={{ color: s.color }} data-testid={`legend-sma-${s.period}`}>
-                    {s.values[p.idx] == null ? "—" : fmtPrice(s.values[p.idx])}
-                  </span>
+              {p.overlays.map((s) => (
+                <span key={s.key} className="inline-flex items-baseline gap-1" data-testid={`overlay-${s.key}`}>
+                  <span style={{ color: s.lines[0].color }}>{s.label}</span>
+                  {s.lines.map((l) => (
+                    <span key={l.id} className="inline-flex items-baseline gap-0.5">
+                      {l.label && <span className="text-muted">{l.label}</span>}
+                      <span className="num" style={{ color: l.color }} data-testid={`legend-${l.id}`}>
+                        {fmtValue(l.values[p.idx])}
+                      </span>
+                    </span>
+                  ))}
                 </span>
               ))}
             </div>
@@ -401,14 +502,20 @@ function Legend(
   );
 }
 
-/** Plot rectangle and data<->pixel mapping for the drawing layer (null until rendered). */
-function geometry(c: echarts.ECharts | null, bars: Bar[], w: Window, tf: string): Geometry | null {
+/** Main-plot rectangle and data<->pixel mapping for the drawing layer (null until rendered). */
+function geometry(
+  c: echarts.ECharts | null,
+  bars: Bar[],
+  w: Window,
+  tf: string,
+  mainBottom: number,
+): Geometry | null {
   if (!c || c.isDisposed() || bars.length === 0) return null;
   const width = c.getWidth();
   const height = c.getHeight();
   if (width === 0 || height === 0) return null;
   return {
-    rect: { x: GRID.left, y: GRID.top, width: width - GRID.left - GRID.right, height: height - GRID.top - GRID.bottom },
+    rect: { x: GRID.left, y: GRID.top, width: width - GRID.left - GRID.right, height: height - GRID.top - mainBottom },
     start: w.start,
     end: w.end,
     bars,
@@ -474,6 +581,7 @@ function axisLabels(bars: Bar[], daily: boolean, w: Window, widthPx: number) {
   }
   return {
     axisLabel: {
+      show: true,
       interval: (i: number) => show.has(i),
       // category values are the bar indices (the formatter's own index arg is not)
       formatter: (v: string) => text.get(Number(v)) ?? "",
@@ -486,16 +594,35 @@ function axisLabels(bars: Bar[], daily: boolean, w: Window, widthPx: number) {
 
 function buildOption(
   bars: Bar[],
-  smas: SmaLine[],
+  studies: { overlays: Study[]; lowers: Study[] },
   showVolume: boolean,
   crosshair: boolean,
   daily: boolean,
   w: Window,
   widthPx: number,
+  heightPx: number,
 ) {
   const last = bars[bars.length - 1];
   const lastUp = last ? last.c >= last.o : true;
   const pointerLabel = { backgroundColor: theme.borderStrong, color: theme.textStrong, fontSize: 11 };
+  const lay = paneLayout(heightPx, studies.lowers.length);
+  const nGrids = 1 + studies.lowers.length;
+  const categories = Array.from({ length: bars.length + FUTURE_SLOTS }, (_, i) => String(i));
+  const labels = axisLabels(bars, daily, w, widthPx);
+  const xIndices = Array.from({ length: nGrids }, (_, i) => i);
+
+  const lineSeries = (l: Line, xAxisIndex: number, yAxisIndex: number) => ({
+    name: l.id,
+    type: "line",
+    xAxisIndex,
+    yAxisIndex,
+    data: l.values,
+    showSymbol: false,
+    connectNulls: false,
+    lineStyle: { color: l.color, width: 1.3, type: l.dashed ? "dashed" : "solid" },
+    itemStyle: { color: l.color },
+    silent: true,
+  });
 
   return {
     animation: false,
@@ -518,21 +645,25 @@ function buildOption(
         },
       },
     },
-    grid: [GRID],
-    xAxis: [
-      {
-        type: "category",
-        data: Array.from({ length: bars.length + FUTURE_SLOTS }, (_, i) => String(i)),
-        boundaryGap: true,
-        axisLine: { lineStyle: { color: theme.border } },
-        axisTick: { show: false },
-        splitLine: { show: true, lineStyle: { color: theme.grid } },
-        ...axisLabels(bars, daily, w, widthPx),
-      },
+    axisPointer: { link: [{ xAxisIndex: "all" }] },
+    grid: [
+      { left: GRID.left, right: GRID.right, top: GRID.top, bottom: lay.mainBottom },
+      ...lay.lowers.map((g) => ({ left: GRID.left, right: GRID.right, top: g.top, height: g.height })),
     ],
+    xAxis: xIndices.map((gridIndex) => ({
+      type: "category",
+      gridIndex,
+      data: categories,
+      boundaryGap: true,
+      axisLine: { lineStyle: { color: theme.border } },
+      axisTick: { show: false },
+      splitLine: { show: true, lineStyle: { color: theme.grid } },
+      ...(gridIndex === nGrids - 1 ? labels : { axisLabel: { show: false } }),
+    })),
     yAxis: [
       {
         type: "value",
+        gridIndex: 0,
         scale: true,
         position: "right",
         min: showVolume ? (v: { min: number; max: number }) => v.min - (v.max - v.min) * 0.28 : undefined,
@@ -540,12 +671,30 @@ function buildOption(
         axisLabel: { color: theme.muted, fontSize: 11, formatter: (v: number) => v.toFixed(2) },
         splitLine: { lineStyle: { color: theme.grid } },
       },
-      { type: "value", show: false, max: (v: { max: number }) => v.max * 4, splitLine: { show: false } },
+      { type: "value", gridIndex: 0, show: false, max: (v: { max: number }) => v.max * 4, splitLine: { show: false } },
+      ...studies.lowers.map((s, i) => ({
+        type: "value",
+        gridIndex: i + 1,
+        position: "right",
+        scale: s.ind.type !== "rsi",
+        min: s.ind.type === "rsi" ? 0 : undefined,
+        max: s.ind.type === "rsi" ? 100 : undefined,
+        splitNumber: 2,
+        axisLine: { show: false },
+        axisLabel: {
+          color: theme.muted,
+          fontSize: 10,
+          showMinLabel: false, // keeps adjacent panes' edge labels from colliding
+          showMaxLabel: false,
+          formatter: (v: number) => v.toFixed(s.ind.type === "macd" ? 2 : 0),
+        },
+        splitLine: { lineStyle: { color: theme.grid } },
+      })),
     ],
     dataZoom: [
       {
         type: "inside",
-        xAxisIndex: 0,
+        xAxisIndex: xIndices,
         startValue: w.start,
         endValue: w.end,
         minValueSpan: MIN_SPAN,
@@ -559,6 +708,7 @@ function buildOption(
       {
         name: "volume",
         type: "bar",
+        xAxisIndex: 0,
         yAxisIndex: 1,
         data: showVolume
           ? bars.map((b) => ({ value: b.v, itemStyle: { color: b.c >= b.o ? theme.volUp : theme.volDown } }))
@@ -569,6 +719,7 @@ function buildOption(
       {
         name: "price",
         type: "candlestick",
+        xAxisIndex: 0,
         yAxisIndex: 0,
         data: bars.map((b) => [b.o, b.c, b.l, b.h]),
         barMaxWidth: 18,
@@ -591,17 +742,34 @@ function buildOption(
             }
           : undefined,
       },
-      ...smas.map((s) => ({
-        name: `sma${s.period}`,
-        type: "line",
-        yAxisIndex: 0,
-        data: s.values,
-        showSymbol: false,
-        connectNulls: false,
-        lineStyle: { color: s.color, width: 1.4 },
-        itemStyle: { color: s.color },
-        silent: true,
-      })),
+      ...studies.overlays.flatMap((s) => s.lines.map((l) => lineSeries(l, 0, 0))),
+      ...studies.lowers.flatMap((s, i) => {
+        const x = i + 1;
+        const y = 2 + i;
+        const out: object[] = [];
+        if (s.histogram) {
+          out.push({
+            name: `${s.key}-bars`,
+            type: "bar",
+            xAxisIndex: x,
+            yAxisIndex: y,
+            data: s.histogram.map((v) => ({ value: v, itemStyle: { color: (v ?? 0) >= 0 ? theme.volUp : theme.volDown } })),
+            barCategoryGap: "30%",
+            silent: true,
+          });
+        }
+        for (const l of s.lines) if (!(s.histogram && l.id.endsWith("histogram"))) out.push(lineSeries(l, x, y));
+        if (s.ind.type === "rsi") {
+          (out[0] as Record<string, unknown>).markLine = {
+            silent: true,
+            symbol: "none",
+            label: { show: false },
+            lineStyle: { color: indicatorColors.rsiBand, type: "dashed", width: 1 },
+            data: [{ yAxis: 30 }, { yAxis: 70 }],
+          };
+        }
+        return out;
+      }),
     ],
   };
 }

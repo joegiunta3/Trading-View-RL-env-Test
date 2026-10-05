@@ -27,8 +27,19 @@ export const theme = {
   overlay: "#0b0e14cc",
 } as const;
 
-/** Line colors for SMA overlays, assigned in order. */
+/** Line colors for price overlays (SMA, EMA, BB, VWAP), assigned in order. */
 export const smaColors = ["#f2b84b", "#a68bff", "#3cc6c0", "#ff8f66", "#7fb2ff"] as const;
+
+/** Lower-pane indicator colors. */
+export const indicatorColors = {
+  rsi: "#b48cff",
+  rsiBand: "#3a4152",
+  macd: "#4c8dff",
+  signal: "#ff9f43",
+  k: "#f2b84b",
+  d: "#4c8dff",
+  j: "#d16aff",
+} as const;
 
 export type ThemeToken = keyof typeof theme;
 

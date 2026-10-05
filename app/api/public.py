@@ -54,8 +54,16 @@ class AlertPatch(BaseModel):
 
 
 class Indicator(BaseModel):
+    """Indicator config; which fields apply depends on `type` (validated by the engine)."""
+
     type: str
     period: int | None = None
+    stddev: float | None = None
+    fast: int | None = None
+    slow: int | None = None
+    signal: int | None = None
+    k: int | None = None
+    d: int | None = None
 
 
 class LayoutIn(BaseModel):

@@ -41,7 +41,17 @@ export type Quote = SymbolInfo & {
 /** `date` is the session date (YYYY-MM-DD); `label` is the bar's open time (HH:MM) or its date for 1D. */
 export type Bar = { time: number; date: string; label: string; o: number; h: number; l: number; c: number; v: number };
 
-export type Indicator = { type: "volume" } | { type: "sma"; period: number };
+export type Indicator =
+  | { type: "volume" }
+  | { type: "sma"; period: number }
+  | { type: "ema"; period: number }
+  | { type: "bb"; period: number; stddev: number }
+  | { type: "vwap" }
+  | { type: "rsi"; period: number }
+  | { type: "macd"; fast: number; slow: number; signal: number }
+  | { type: "kdj"; period: number; k: number; d: number };
+
+export type IndicatorType = Indicator["type"];
 
 export type LayoutId = "1" | "2" | "3" | "4";
 

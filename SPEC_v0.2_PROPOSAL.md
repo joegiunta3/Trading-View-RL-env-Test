@@ -214,6 +214,32 @@ Original icons and styling; no copied assets.
 
 ---
 
+## 3C. More indicators: **APPROVED AND BUILT** (2026-10-05; merged into SPEC.md §6)
+
+Owner goal: prompts like "add X and Y to the Z chart; when price hits $5, crosses the SMA, RSI is
+above N and volume ...". Needs more indicators, all readable as text.
+
+| Indicator | Where | Default settings | Definition |
+|---|---|---|---|
+| SMA | on price | 20 | simple mean of closes |
+| EMA | on price | 20 | α = 2/(n+1), seeded with the SMA of the first n closes |
+| Bollinger Bands | on price | 20, 2 | SMA(n) ± k × population std-dev of the last n closes |
+| VWAP | on price | (none) | Σ(typical × vol) / Σ vol, typical = (H+L+C)/3, resets each session (intraday only) |
+| RSI | own pane (0–100) | 14 | Wilder: gains/losses smoothed with RMA, seeded with their n-bar mean |
+| MACD | own pane | 12, 26, 9 | EMA(fast) − EMA(slow); signal = EMA(signal) of MACD; histogram = MACD − signal |
+| KDJ | own pane | 9, 3, 3 | RSV = (C − LLV(L,n)) / (HHV(H,n) − LLV(L,n)) × 100; K = ((m1−1)K + RSV)/m1, D = ((m2−1)D + K)/m2 (both start at 50); J = 3K − 2D |
+| Volume | on price | (none) | (existing) |
+
+- Multiple instances with different settings are allowed (e.g. SMA 20 + SMA 50); at most 10 indicators
+  and 3 lower panes per chart.
+- Values appear in the legends (main legend for overlays, a small legend per lower pane) for the hovered
+  or latest bar.
+- The same formulas are implemented in Python (`app/indicators.py`) and exposed to the harness at
+  `POST /_env/indicators`, so graders and writers get exactly the numbers the UI shows; tests check they
+  agree.
+
+---
+
 ## 4. Further environment features (candidates, after multi-chart)
 
 Each needs your approval before it's built. Items marked ⚠ reverse a v0.1 non-goal (SPEC §1).

@@ -1,11 +1,11 @@
-import { Activity, AlarmClockPlus, ChevronDown, Plus, Search, X } from "lucide-react";
+import { AlarmClockPlus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marketStatus } from "../format";
-import { smaColors } from "../theme";
 import type { Clock, Indicator, LayoutId, SymbolInfo } from "../types";
+import { IndicatorMenu } from "./IndicatorMenu";
 import { LayoutMenu } from "./LayoutMenu";
 import { Logo } from "./Logo";
-import { Button, Input } from "./ui";
+import { Button } from "./ui";
 
 type Props = {
   appName: string;
@@ -148,99 +148,6 @@ function SymbolSearch({
             </li>
           ))}
         </ul>
-      )}
-    </div>
-  );
-}
-
-function IndicatorMenu({ indicators, onChange }: { indicators: Indicator[]; onChange: (i: Indicator[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const [period, setPeriod] = useState("20");
-  const [error, setError] = useState("");
-  const box = useRef<HTMLDivElement>(null);
-  const hasVolume = indicators.some((i) => i.type === "volume");
-  const smas = indicators.filter((i): i is { type: "sma"; period: number } => i.type === "sma");
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  const addSma = () => {
-    const n = Number(period);
-    if (!Number.isInteger(n) || n < 1 || n > 500) return setError("Period must be a whole number from 1 to 500.");
-    if (smas.some((s) => s.period === n)) return setError(`SMA ${n} is already on the chart.`);
-    if (indicators.length >= 10) return setError("At most 10 indicators.");
-    setError("");
-    onChange([...indicators, { type: "sma", period: n }]);
-  };
-
-  return (
-    <div ref={box} className="relative">
-      <Button variant="ghost" data-testid="indicators-button" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <Activity size={14} /> Indicators
-        {smas.length > 0 && <span className="rounded bg-accent-soft px-1 text-[10px] text-accent">{smas.length}</span>}
-        <ChevronDown size={12} />
-      </Button>
-      {open && (
-        <div
-          data-testid="indicators-menu"
-          className="absolute top-8 left-0 z-50 w-64 rounded border border-line-strong bg-raised p-3 shadow-2xl"
-        >
-          <label className="flex cursor-pointer items-center justify-between py-1">
-            <span>Volume</span>
-            <input
-              type="checkbox"
-              data-testid="toggle-volume"
-              checked={hasVolume}
-              onChange={(e) =>
-                onChange(e.target.checked ? [{ type: "volume" }, ...indicators] : indicators.filter((i) => i.type !== "volume"))
-              }
-              className="accent-[var(--cv-accent)]"
-            />
-          </label>
-          <div className="my-2 h-px bg-line" />
-          <div className="mb-1.5 text-[10px] font-semibold tracking-wider text-muted uppercase">Simple moving average</div>
-          <ul className="mb-2 flex flex-col gap-1" data-testid="sma-list">
-            {smas.length === 0 && <li className="text-[12px] text-faint">None</li>}
-            {smas.map((s, i) => (
-              <li key={s.period} className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <span className="h-0.5 w-4 rounded" style={{ background: smaColors[i % smaColors.length] }} />
-                  SMA {s.period}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove SMA ${s.period}`}
-                  data-testid={`remove-sma-${s.period}`}
-                  onClick={() => onChange(indicators.filter((x) => !(x.type === "sma" && x.period === s.period)))}
-                  className="rounded p-0.5 text-muted hover:bg-hover hover:text-down"
-                >
-                  <X size={13} />
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="flex gap-1.5">
-            <Input
-              type="number"
-              min={1}
-              max={500}
-              aria-label="SMA period"
-              data-testid="sma-period"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addSma()}
-            />
-            <Button variant="primary" data-testid="add-sma" onClick={addSma}>
-              <Plus size={13} /> Add
-            </Button>
-          </div>
-          {error && <p className="mt-1.5 text-[11px] text-down">{error}</p>}
-        </div>
       )}
     </div>
   );
