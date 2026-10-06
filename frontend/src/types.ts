@@ -57,8 +57,70 @@ export type IndicatorType = Indicator["type"];
 
 export type LayoutId = "1" | "2" | "3" | "4";
 
+export type StrategyType = "ma_cross" | "rsi_reversal";
+export type Direction = "both" | "long" | "short";
+
+/** A backtest strategy on a chart pane (at most one per pane). */
+export type Strategy = (
+  | { type: "ma_cross"; fast: number; slow: number }
+  | { type: "rsi_reversal"; period: number; oversold: number; overbought: number }
+) & { qty: number; direction: Direction; hidden?: boolean };
+
 /** One chart pane. All four always exist server-side; the layout decides how many are shown. */
-export type Pane = { pane: number; ticker: string; timeframe: string; indicators: Indicator[] };
+export type Pane = {
+  pane: number;
+  ticker: string;
+  timeframe: string;
+  indicators: Indicator[];
+  strategy: Strategy | null;
+};
+
+export type BacktestTrade = {
+  number: number;
+  side: "long" | "short";
+  qty: number;
+  notional: number;
+  entry_time: number;
+  entry_when: string;
+  entry_price: number;
+  entry_index: number;
+  exit_time?: number;
+  exit_when?: string;
+  exit_price?: number;
+  exit_index?: number;
+  mark_price?: number;
+  pnl: number;
+  return_pct: number;
+  open: boolean;
+};
+
+export type Backtest = {
+  ticker: string;
+  timeframe: string;
+  name: string;
+  strategy: Strategy;
+  initial_capital: number;
+  range: { from: string | null; to: string | null };
+  bars_tested: number;
+  trades: BacktestTrade[];
+  stats: {
+    total_pnl: number;
+    total_pnl_pct: number;
+    max_drawdown: number;
+    max_drawdown_pct: number;
+    total_trades: number;
+    winning_trades: number;
+    percent_profitable: number;
+    profit_factor: number | null;
+    avg_trade: number;
+    largest_win: number;
+    largest_loss: number;
+    open_pnl: number;
+    buy_hold_pct: number;
+    buy_hold_pnl: number;
+  };
+  equity: { time: number; pnl: number; buy_hold: number }[];
+};
 
 export type Layout = { layout: LayoutId; active_pane: number; panes: Pane[] };
 

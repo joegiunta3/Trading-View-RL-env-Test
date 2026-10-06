@@ -240,6 +240,75 @@ above N and volume ...". Needs more indicators, all readable as text.
 
 ---
 
+## 3D. Strategies and backtesting: **APPROVED AND BUILT** (2026-10-06; merged into SPEC.md §6/§8)
+
+Owner request (2026-10-06) with reference screenshots of a strategy on a chart, entry/exit arrows,
+a Strategy Tester overview and its List of trades. **No strategy coding language.**
+
+### Strategies (two built-in)
+*(proposed, see [Q-S1])*
+| Strategy | Default settings | Rule (evaluated at each bar's close) |
+|---|---|---|
+| **MA Crossover** | fast SMA 9, slow SMA 21, direction long & short | fast crosses above slow: go long; crosses below: go short (reverse) |
+| **RSI Reversal** | RSI 14, oversold 30, overbought 70, direction long & short | RSI crosses up through 30: go long; crosses down through 70: go short; opposite signal exits/reverses |
+
+### Backtest rules *(proposed)*
+- **Backtest only:** strategies never place orders in the paper account.
+- **Signals at bar close, fills at the next bar's open:** no repainting, and no peeking at a bar
+  before it closes.
+- **Range:** from the first bar of the chart's history up to now (e.g. Oct 2025 – Jan 15 on 1h).
+  Shown as text in the tester; no date picker for now.
+- **Starting capital $100,000, zero commission.** Order size is a fixed number of shares (default 100,
+  editable) [Q-S2].
+- **Live:** as each new bar closes, the strategy re-evaluates. A new signal adds an entry arrow and a
+  trade (the open trade shows mark-to-market PnL), so you see where it "would have bought in".
+- **One strategy per chart pane** [Q-S3]. Each pane in a multi-chart layout can run its own.
+
+### On the chart
+- **Added from the Indicators menu** under a new "Strategies" section (one click, toast).
+- **Legend row** like indicators: "MA Crossover 9 21", with hide/settings/remove.
+- **Arrows at the exact fill price on the fill candle:**
+  - **Long entry:** blue ▲ below the price, labelled "Long +100".
+  - **Short entry:** red ▼.
+  - **Exit:** magenta ▼/▲ labelled "Close −100".
+
+### Strategy Tester (new bottom-panel tab, expandable)
+- **Header:** the strategy name, an Overview / List of trades toggle, the date range, and an
+  expand/collapse button so the bottom panel can grow to most of the screen.
+- **Overview / Key stats:**
+  - Total PnL ($ and %), Max drawdown ($ and %), Profitable trades (% and wins/total), Profit
+    factor.
+  - Plus total trades, average trade, largest win/loss, and buy-and-hold return.
+- **Performance:** a cumulative PnL line (green above 0, red below), with a "Buy and hold" toggle line.
+- **List of trades:**
+  - One block per trade, newest first: trade #, **Long (blue) / Short (red)**, and an Exit row above
+    an Entry row, each with date & time and price.
+  - Per trade: size (qty and $ notional), net PnL ($), return %.
+  - The open trade is marked "Open".
+
+### Server side, so graders see the same numbers
+- **The backtest runs on the server** (`app/strategies.py`), so the UI, graders and task writers
+  share one implementation.
+  - `GET /api/backtest?ticker&tf&strategy…` returns trades, stats and the equity curve from bars up
+    to now (no future data).
+  - The env API mirrors it for graders.
+- **Strategy config is stored per pane** (saved, in `/_env/state`); add/edit/hide/remove go in the
+  action log.
+- **Tests:**
+  - Hand-checked trades on synthetic series.
+  - No signal uses unclosed bars.
+  - Fills at the next open.
+  - Stats formulas (profit factor, max drawdown).
+  - UI arrows and the trade list match the API.
+
+### Decisions (owner, 2026-10-06)
+- **[Q-S1]** MA Crossover + RSI Reversal.
+- **[Q-S2]** Fixed shares, default 100 (editable).
+- **[Q-S3]** One strategy per chart pane.
+- **[Q-S4]** Long & short by default (settings allow long-only / short-only).
+
+---
+
 ## 4. Further environment features (candidates, after multi-chart)
 
 Each needs your approval before it's built. Items marked ⚠ reverse a v0.1 non-goal (SPEC §1).

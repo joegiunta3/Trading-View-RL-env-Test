@@ -79,6 +79,7 @@ class PaneIn(BaseModel):
     ticker: str | None = None
     timeframe: str | None = None
     indicators: list[Indicator] | None = None
+    strategy: dict | None = None  # send null to remove the pane's strategy
 
 
 class DrawingPoint(BaseModel):
@@ -283,7 +284,12 @@ def create_public_app(holder: EnvHolder, frontend_dist: Path | None = FRONTEND_D
             if body.indicators is None
             else [i.model_dump(exclude_none=True) for i in body.indicators]
         )
-        return ep().update_pane(pane, body.ticker, body.timeframe, inds)
+        kwargs = {"strategy": body.strategy} if "strategy" in body.model_fields_set else {}
+        return ep().update_pane(pane, body.ticker, body.timeframe, inds, **kwargs)
+
+    @app.get("/api/panes/{pane}/backtest")
+    def pane_backtest(pane: int) -> dict:
+        return ep().backtest_pane(pane)
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket) -> None:

@@ -47,7 +47,13 @@ test("timeframe and SMA settings are saved and computed correctly", async ({ app
 
   await expect
     .poll(async () => (await (await request.get("/api/layout")).json()).panes[0])
-    .toEqual({ pane: 0, ticker: "XOM", timeframe: "15m", indicators: [{ type: "volume" }, { type: "sma", period: 20 }] });
+    .toEqual({
+      pane: 0,
+      ticker: "XOM",
+      timeframe: "15m",
+      indicators: [{ type: "volume" }, { type: "sma", period: 20 }],
+      strategy: null,
+    });
 
   const closes = (await bars(request, "XOM", "15m")).map((b) => b.c);
   const expected = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;

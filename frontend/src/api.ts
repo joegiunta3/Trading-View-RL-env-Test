@@ -4,6 +4,7 @@ import type {
   AlertCondition,
   AlertLogEntry,
   AppConfig,
+  Backtest,
   Bar,
   Clock,
   Drawing,
@@ -17,6 +18,7 @@ import type {
   Position,
   Quote,
   Side,
+  Strategy,
   SymbolInfo,
   Trade,
   Watchlist,
@@ -111,6 +113,9 @@ export const api = {
   layout: () => request<Layout>("GET", "/api/layout"),
   setLayout: (layout: LayoutId) => request<Layout>("PUT", "/api/layout", { layout }),
   setActivePane: (pane: number) => request<Layout>("PUT", "/api/layout/active", { pane }),
-  updatePane: (pane: number, changes: { ticker?: string; timeframe?: string; indicators?: Indicator[] }) =>
-    request<Layout>("PUT", `/api/panes/${pane}`, changes),
+  updatePane: (
+    pane: number,
+    changes: { ticker?: string; timeframe?: string; indicators?: Indicator[]; strategy?: Strategy | null },
+  ) => request<Layout>("PUT", `/api/panes/${pane}`, changes),
+  paneBacktest: (pane: number) => request<Backtest>("GET", `/api/panes/${pane}/backtest`),
 };

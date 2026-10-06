@@ -2,10 +2,11 @@ import { X } from "lucide-react";
 import { useState } from "react";
 import { ApiError, api } from "../api";
 import { fmtInt, fmtPrice, fmtSignedUsd, fmtUsd, toneClass } from "../format";
-import type { Account, Order, Position, Side, Trade } from "../types";
+import type { Account, Backtest, Order, Position, Side, Trade } from "../types";
+import { StrategyTester } from "./StrategyTester";
 import { Empty, ErrorText, Tabs, td, th } from "./ui";
 
-type Tab = "positions" | "orders" | "history" | "pnl";
+export type BottomTab = "positions" | "orders" | "history" | "pnl" | "strategy";
 
 export function BottomPanel({
   account,
@@ -16,6 +17,10 @@ export function BottomPanel({
   onSymbol,
   onClosePosition,
   reload,
+  tab,
+  onTab,
+  backtest,
+  hasStrategy,
   children,
 }: {
   account: Account | null;
@@ -26,9 +31,14 @@ export function BottomPanel({
   onSymbol: (t: string) => void;
   onClosePosition: (ticker: string, side: Side, qty: number) => void;
   reload: () => void;
+  tab: BottomTab;
+  onTab: (t: BottomTab) => void;
+  /** Backtest of the active pane's strategy, for the Strategy Tester tab. */
+  backtest: Backtest | null;
+  hasStrategy: boolean;
   children: React.ReactNode;
 }) {
-  const [tab, setTab] = useState<Tab>("positions");
+  const [expanded, setExpanded] = useState(false);
   const [error, setError] = useState("");
   const working = orders.filter((o) => o.status === "working").length;
 
@@ -43,19 +53,24 @@ export function BottomPanel({
   };
 
   return (
-    <section className="flex h-72 shrink-0 border-t border-line bg-panel" data-testid="bottom-panel">
+    <section
+      className={`flex shrink-0 border-t border-line bg-panel ${tab === "strategy" && expanded ? "h-[62vh]" : "h-72"}`}
+      data-testid="bottom-panel"
+      data-expanded={tab === "strategy" && expanded}
+    >
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex items-center">
           <div className="flex-1">
             <Tabs
               idPrefix="bottom"
               value={tab}
-              onChange={setTab}
+              onChange={onTab}
               tabs={[
                 { id: "positions", label: `Positions${positions.length ? ` (${positions.length})` : ""}` },
                 { id: "orders", label: `Orders${working ? ` (${working})` : ""}` },
                 { id: "history", label: "History" },
                 { id: "pnl", label: "P&L" },
+                { id: "strategy", label: "Strategy Tester" },
               ]}
             />
           </div>
@@ -74,7 +89,15 @@ export function BottomPanel({
           )}
         </div>
         <ErrorText>{error}</ErrorText>
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className={`min-h-0 flex-1 ${tab === "strategy" ? "flex flex-col" : "overflow-auto"}`}>
+          {tab === "strategy" && (
+            <StrategyTester
+              backtest={backtest}
+              hasStrategy={hasStrategy}
+              expanded={expanded}
+              onToggleExpand={() => setExpanded((e) => !e)}
+            />
+          )}
           {tab === "positions" && (
             <Positions positions={positions} tradingOpen={tradingOpen} onSymbol={onSymbol} onClose={onClosePosition} />
           )}

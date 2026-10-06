@@ -2,7 +2,7 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { createRef, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "./api";
 import { Alerts } from "./components/Alerts";
-import { BottomPanel } from "./components/BottomPanel";
+import { type BottomTab, BottomPanel } from "./components/BottomPanel";
 import { DrawingsList } from "./components/DrawingsList";
 import { type ChartControls, ChartPanel, type RangeRequest } from "./components/ChartPanel";
 import { LINE_TOOLS, LeftRail } from "./components/LeftRail";
@@ -16,12 +16,14 @@ import { Tabs } from "./components/ui";
 import { Watchlists } from "./components/Watchlists";
 import { loadConfig } from "./config";
 import { CONDITION_LABEL, fmtCountdown, fmtInt, fmtPrice } from "./format";
+import { strategyLabel } from "./strategies";
 import { type BarSub, useLive } from "./live";
 import type {
   Account,
   Alert,
   AlertLogEntry,
   AppConfig,
+  Backtest,
   Bar,
   Drawing,
   DrawingKind,
@@ -34,6 +36,7 @@ import type {
   Pane,
   Position,
   Side,
+  Strategy,
   SymbolInfo,
   Trade,
   Watchlist,
@@ -74,6 +77,9 @@ export default function App() {
   const [prefill, setPrefill] = useState<TicketPrefill | null>(null);
   const [sideTab, setSideTab] = useState<SideTab>("watchlist");
   const [crosshair, setCrosshair] = useState(true);
+  const [bottomTab, setBottomTab] = useState<BottomTab>("positions");
+  const [backtests, setBacktests] = useState<(Backtest | null)[]>([null, null, null, null]);
+  const backtestKeys = useRef<string[]>(["", "", "", ""]);
   const [drawings, setDrawings] = useState<Drawing[]>([]);
   const [tool, setTool] = useState<DrawingKind | null>(null);
   const [magnet, setMagnet] = useState(false);
@@ -253,6 +259,32 @@ export default function App() {
     if (simNow != null && config) refreshAccount();
   }, [simNow, config, refreshAccount]);
 
+  // Backtests for every visible pane with a strategy; re-run when a bar closes or the market state changes.
+  const marketStatus = live.clock?.market_status;
+  useEffect(() => {
+    if (!layout) return;
+    layout.panes.forEach((p, i) => {
+      if (i >= visible || !p.strategy) {
+        backtestKeys.current[i] = "";
+        if (backtests[i]) setBacktests((bs) => bs.map((b, j) => (j === i ? null : b)));
+        return;
+      }
+      const { hidden: _h, ...cfg } = p.strategy;
+      void _h;
+      const key = `${paneKey(p)}|${JSON.stringify(cfg)}|${series[i].bars.length}|${marketStatus}`;
+      if (series[i].key !== paneKey(p) || backtestKeys.current[i] === key) return;
+      backtestKeys.current[i] = key;
+      api
+        .paneBacktest(i)
+        .then((bt) => {
+          if (backtestKeys.current[i] === key) setBacktests((bs) => bs.map((b, j) => (j === i ? bt : b)));
+        })
+        .catch(() => {
+          backtestKeys.current[i] = "";
+        });
+    });
+  }, [layout, visible, series, marketStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // --- actions (all chart actions target the active pane) ----------------------------------
 
   const saveLayout = useCallback(
@@ -269,7 +301,7 @@ export default function App() {
   );
 
   const patchPane = useCallback(
-    (pane: number, changes: { ticker?: string; timeframe?: string; indicators?: Indicator[] }) =>
+    (pane: number, changes: { ticker?: string; timeframe?: string; indicators?: Indicator[]; strategy?: Strategy | null }) =>
       saveLayout(
         (l) => ({ ...l, panes: l.panes.map((p) => (p.pane === pane ? { ...p, ...changes } : p)) }),
         () => api.updatePane(pane, changes),
@@ -410,6 +442,16 @@ export default function App() {
           pushToast({ tone: "success", title: "Indicator added to chart" });
         }}
         onIndicatorError={(message) => pushToast({ tone: "error", title: "Can't add indicator", body: message })}
+        onAddStrategy={(st) => {
+          const replaced = activePane.strategy;
+          patchPane(activeIdx, { strategy: st });
+          setBottomTab("strategy");
+          pushToast({
+            tone: "success",
+            title: "Strategy added to chart",
+            body: replaced ? `Replaced ${strategyLabel(replaced)} (one strategy per chart).` : undefined,
+          });
+        }}
         clock={live.clock}
         connected={live.connected}
         onAlert={openAlert}
@@ -478,6 +520,9 @@ export default function App() {
                     onSelectDrawing={setSelectedDrawing}
                     onDeleteDrawing={deleteDrawing}
                     onIndicators={(inds) => patchPane(i, { indicators: inds })}
+                    strategy={p.strategy}
+                    backtest={p.strategy ? backtests[i] : null}
+                    onStrategy={(st) => patchPane(i, { strategy: st })}
                   />
                   {visible > 1 && (
                     <button
@@ -509,6 +554,10 @@ export default function App() {
               refreshOrders();
               refreshAccount();
             }}
+            tab={bottomTab}
+            onTab={setBottomTab}
+            backtest={activePane.strategy ? backtests[activeIdx] : null}
+            hasStrategy={!!activePane.strategy}
           >
             <OrderTicket
               active={active}

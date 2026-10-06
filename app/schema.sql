@@ -110,7 +110,8 @@ CREATE TABLE chart_panes (           -- the four chart panes; layout decides how
     pane_index INTEGER PRIMARY KEY CHECK (pane_index BETWEEN 0 AND 3),
     symbol_id INTEGER NOT NULL,
     timeframe TEXT NOT NULL,
-    indicators_json TEXT NOT NULL
+    indicators_json TEXT NOT NULL,
+    strategy_json TEXT               -- one backtest strategy per pane, or NULL
 );
 CREATE TABLE drawings (             -- chart drawings, per symbol (shown on every pane of that symbol)
     id INTEGER PRIMARY KEY,

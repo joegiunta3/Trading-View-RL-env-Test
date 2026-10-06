@@ -1,7 +1,8 @@
 import { Activity, ChevronDown, Search } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { CATALOG, LOWER_PANE, defaults, validate } from "../indicators";
-import type { Indicator } from "../types";
+import { STRATEGY_CATALOG, strategyDefaults } from "../strategies";
+import type { Indicator, Strategy } from "../types";
 import { Button } from "./ui";
 
 /**
@@ -11,10 +12,12 @@ import { Button } from "./ui";
 export function IndicatorMenu({
   indicators,
   onAdd,
+  onAddStrategy,
   onError,
 }: {
   indicators: Indicator[];
   onAdd: (ind: Indicator) => void;
+  onAddStrategy: (s: Strategy) => void;
   onError: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -32,6 +35,9 @@ export function IndicatorMenu({
 
   const q = query.trim().toLowerCase();
   const items = CATALOG.filter((c) => !q || c.name.toLowerCase().includes(q) || c.type.includes(q));
+  const strategyItems = STRATEGY_CATALOG.filter(
+    (c) => !q || c.name.toLowerCase().includes(q) || "strategy".includes(q) || q.includes("strateg"),
+  );
   const add = (type: Indicator["type"]) => {
     const ind = defaults(type);
     const err = validate(ind, indicators);
@@ -97,7 +103,28 @@ export function IndicatorMenu({
           <div className="min-h-0 overflow-auto pb-1">
             {group("On the price chart", false)}
             {group("Below the chart", true)}
-            {items.length === 0 && <p className="px-3 py-4 text-[12px] text-faint">No indicators match.</p>}
+            {strategyItems.length > 0 && (
+              <>
+                <div className="mt-1 border-t border-line px-3 pt-2.5 pb-1 text-[10px] font-semibold tracking-wider text-muted uppercase">
+                  Strategies
+                </div>
+                {strategyItems.map((c) => (
+                  <button
+                    key={c.type}
+                    type="button"
+                    data-testid={`add-strategy-${c.type}`}
+                    onClick={() => onAddStrategy(strategyDefaults(c.type))}
+                    className="flex w-full flex-col items-start px-3 py-1.5 text-left hover:bg-hover"
+                  >
+                    <span className="text-[13px] text-strong">{c.name}</span>
+                    <span className="text-[11px] text-muted">{c.desc}</span>
+                  </button>
+                ))}
+              </>
+            )}
+            {items.length === 0 && strategyItems.length === 0 && (
+              <p className="px-3 py-4 text-[12px] text-faint">Nothing matches.</p>
+            )}
           </div>
         </div>
       )}

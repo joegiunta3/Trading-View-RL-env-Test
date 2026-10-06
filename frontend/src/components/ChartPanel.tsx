@@ -1,5 +1,10 @@
-import { BarChart, CandlestickChart, LineChart } from "echarts/charts";
-import { DataZoomComponent, GridComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
+import { BarChart, CandlestickChart, LineChart, ScatterChart } from "echarts/charts";
+import {
+  DataZoomComponent,
+  GridComponent,
+  MarkLineComponent,
+  TooltipComponent,
+} from "echarts/components";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Eye, EyeOff, Minus, Plus, RotateCcw, Settings2, Trash2 } from "lucide-react";
@@ -7,6 +12,7 @@ import { type MutableRefObject, useEffect, useMemo, useRef, useState } from "rea
 import { fmtBarTime, fmtDay, fmtInt, fmtMonth, fmtPct, fmtPrice, fmtSigned, toneClass } from "../format";
 import {
   LOWER_PANE,
+  type ParamSpec,
   type Series,
   catalogEntry,
   compute,
@@ -16,14 +22,16 @@ import {
   shortName,
   validate,
 } from "../indicators";
-import { indicatorColors, smaColors, theme } from "../theme";
-import type { Bar, Drawing, DrawingKind, DrawingPoint, Indicator, Quote } from "../types";
+import { DIRECTION_OPTIONS, strategyEntry, strategyLabel, validateStrategy } from "../strategies";
+import { indicatorColors, smaColors, strategyColors, theme } from "../theme";
+import type { Backtest, Bar, Drawing, DrawingKind, DrawingPoint, Indicator, Quote, Strategy } from "../types";
 import { DrawingLayer, type Geometry } from "./DrawingLayer";
 
 echarts.use([
   CandlestickChart,
   BarChart,
   LineChart,
+  ScatterChart,
   GridComponent,
   DataZoomComponent,
   TooltipComponent,
@@ -85,6 +93,23 @@ type Props = {
   onDeleteDrawing: (id: number) => void;
   /** Replace this pane's indicator list (hide/show, edit settings, remove). */
   onIndicators: (next: Indicator[]) => void;
+  strategy: Strategy | null;
+  /** Backtest of `strategy` on this pane (null while loading or without a strategy). */
+  backtest: Backtest | null;
+  /** Replace or remove (null) this pane's strategy. */
+  onStrategy: (s: Strategy | null) => void;
+};
+
+/** State of the settings popover (indicators and strategies share it). */
+type Editing = {
+  title: string;
+  params: ParamSpec[];
+  select?: { name: string; label: string; options: { value: string; label: string }[] };
+  draft: Record<string, string>;
+  error: string;
+  at: { top: number; left: number };
+  /** Validate and apply the draft; returns an error message, or null when applied. */
+  apply: (draft: Record<string, string>) => string | null;
 };
 
 /** Price overlays and lower-pane studies for the given indicator configs. */
@@ -175,12 +200,7 @@ export function ChartPanel(p: Props) {
   const volume = indicators.find((i) => i.type === "volume");
   const showVolume = !!volume && !volume.hidden;
   const [selectedStudy, setSelectedStudy] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{
-    ind: Indicator;
-    draft: Record<string, string>;
-    error: string;
-    at: { top: number; left: number };
-  } | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const studyActions = {
     selected: selectedStudy,
@@ -194,16 +214,60 @@ export function ChartPanel(p: Props) {
       p.onIndicators(indicators.filter((i) => indicatorKey(i) !== indicatorKey(ind)));
     },
     edit: (ind: Indicator, anchor: HTMLElement) => {
-      const a = anchor.getBoundingClientRect();
-      const box = sectionRef.current!.getBoundingClientRect();
-      const top = Math.min(a.bottom - box.top + 4, box.height - 190); // keep it inside the pane
+      const entry = catalogEntry(ind.type);
       setEditing({
-        ind,
-        at: { top: Math.max(4, top), left: Math.max(4, Math.min(a.left - box.left, box.width - 270)) },
+        title: entry.name,
+        params: entry.params,
+        at: popoverAt(anchor, entry.params.length),
         error: "",
-        draft: Object.fromEntries(
-          catalogEntry(ind.type).params.map((x) => [x.name, String((ind as unknown as Record<string, number>)[x.name])]),
-        ),
+        draft: Object.fromEntries(entry.params.map((x) => [x.name, String((ind as unknown as Record<string, number>)[x.name])])),
+        apply: (draft) => {
+          const next = { ...ind } as Record<string, unknown>;
+          for (const [k, v] of Object.entries(draft)) next[k] = Number(v);
+          const err = validate(next as Indicator, indicators, indicatorKey(ind));
+          if (err) return err;
+          p.onIndicators(indicators.map((i) => (indicatorKey(i) === indicatorKey(ind) ? (next as Indicator) : i)));
+          return null;
+        },
+      });
+    },
+  };
+  const popoverAt = (anchor: HTMLElement, rows: number) => {
+    const a = anchor.getBoundingClientRect();
+    const box = sectionRef.current!.getBoundingClientRect();
+    const height = 110 + rows * 36;
+    const top = Math.min(a.bottom - box.top + 4, box.height - height); // keep it inside the pane
+    return { top: Math.max(4, top), left: Math.max(4, Math.min(a.left - box.left, box.width - 270)) };
+  };
+  const strategyActions = p.strategy && {
+    selected: selectedStudy === "strategy",
+    select: () => setSelectedStudy((k) => (k === "strategy" ? null : "strategy")),
+    toggle: () => p.onStrategy({ ...p.strategy!, hidden: !p.strategy!.hidden }),
+    remove: () => {
+      setSelectedStudy(null);
+      p.onStrategy(null);
+    },
+    edit: (anchor: HTMLElement) => {
+      const s = p.strategy!;
+      const entry = strategyEntry(s.type);
+      setEditing({
+        title: entry.name,
+        params: entry.params,
+        select: { name: "direction", label: "Trade direction", options: DIRECTION_OPTIONS },
+        at: popoverAt(anchor, entry.params.length + 1),
+        error: "",
+        draft: {
+          ...Object.fromEntries(entry.params.map((x) => [x.name, String((s as unknown as Record<string, number>)[x.name])])),
+          direction: s.direction,
+        },
+        apply: (draft) => {
+          const next = { ...s } as Record<string, unknown>;
+          for (const [k, v] of Object.entries(draft)) next[k] = k === "direction" ? v : Number(v);
+          const err = validateStrategy(next as Strategy);
+          if (err) return err;
+          p.onStrategy(next as Strategy);
+          return null;
+        },
       });
     },
   };
@@ -280,11 +344,13 @@ export function ChartPanel(p: Props) {
       el.current.dataset.window = `${w.start}-${w.end}`;
       el.current.dataset.bars = String(n);
     }
-    c.setOption(buildOption(bars, studies, showVolume, crosshair, daily, w, size.w, size.h), {
+    const markers = p.strategy && !p.strategy.hidden ? strategyMarkers(bars, p.backtest) : [];
+    if (el.current) el.current.dataset.markers = String(markers.length);
+    c.setOption(buildOption(bars, studies, showVolume, crosshair, daily, w, size.w, size.h, markers), {
       notMerge: fresh,
       lazyUpdate: true,
     });
-  }, [bars, studies, showVolume, crosshair, daily, p.barsKey, p.range, size]);
+  }, [bars, studies, showVolume, crosshair, daily, p.barsKey, p.range, size, p.backtest, p.strategy]);
 
   // Navigation used by the left rail, the on-chart buttons and the keyboard.
   useEffect(() => {
@@ -355,6 +421,8 @@ export function ChartPanel(p: Props) {
         overlays={studies.overlays}
         volume={volume ?? null}
         actions={studyActions}
+        strategyActions={strategyActions || null}
+        backtest={p.backtest}
         daily={daily}
         narrow={narrow}
         collapsed={collapsed}
@@ -381,17 +449,13 @@ export function ChartPanel(p: Props) {
         />
       </div>
       {editing && (
-        <IndicatorSettings
+        <SettingsPopover
           editing={editing}
           onDraft={(draft) => setEditing({ ...editing, draft, error: "" })}
           onCancel={() => setEditing(null)}
           onApply={() => {
-            const next = { ...editing.ind } as Record<string, unknown>;
-            for (const [k, v] of Object.entries(editing.draft)) next[k] = Number(v);
-            const ind = next as Indicator;
-            const err = validate(ind, indicators, indicatorKey(editing.ind));
+            const err = editing.apply(editing.draft);
             if (err) return setEditing({ ...editing, error: err });
-            p.onIndicators(indicators.map((i) => (indicatorKey(i) === indicatorKey(editing.ind) ? ind : i)));
             setEditing(null);
             setSelectedStudy(null);
           }}
@@ -494,6 +558,116 @@ function StudyRow({
   );
 }
 
+type StrategyActions = {
+  selected: boolean;
+  select: () => void;
+  toggle: () => void;
+  remove: () => void;
+  edit: (anchor: HTMLElement) => void;
+};
+
+/** The pane's strategy in the legend: name, settings and live net PnL; actions on hover/click. */
+function StrategyRow({
+  strategy,
+  actions,
+  backtest,
+}: {
+  strategy: Strategy;
+  actions: StrategyActions;
+  backtest: Backtest | null;
+}) {
+  const icon = (label: string, testId: string, onClick: (el: HTMLElement) => void, node: React.ReactNode) => (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick(e.currentTarget);
+      }}
+      className="flex h-5 w-5 items-center justify-center rounded text-muted hover:bg-hover hover:text-strong"
+    >
+      {node}
+    </button>
+  );
+  const pnl = backtest?.stats.total_pnl;
+  return (
+    <div
+      data-study="strategy"
+      data-testid="strategy-row"
+      data-hidden={!!strategy.hidden}
+      role="button"
+      tabIndex={0}
+      aria-pressed={actions.selected}
+      onClick={actions.select}
+      onKeyDown={(e) => e.key === "Enter" && actions.select()}
+      className={`group/row pointer-events-auto inline-flex h-6 cursor-pointer items-center gap-1.5 rounded border px-1.5 ${
+        actions.selected ? "border-accent bg-raised" : "border-transparent hover:border-line hover:bg-raised/70"
+      }`}
+    >
+      <span className={strategy.hidden ? "text-faint" : "font-medium text-strong"} data-testid="strategy-name">
+        {strategyLabel(strategy)}
+      </span>
+      {!strategy.hidden && pnl != null && (
+        <span className={`num ${toneClass(pnl)}`} data-testid="strategy-pnl">
+          {fmtSigned(pnl)}
+        </span>
+      )}
+      <span className={`items-center gap-0.5 ${actions.selected ? "flex" : "hidden group-hover/row:flex group-focus/row:flex"}`}>
+        {icon(strategy.hidden ? "Show" : "Hide", "strategy-hide", () => actions.toggle(), strategy.hidden ? <EyeOff size={13} /> : <Eye size={13} />)}
+        {icon("Settings", "strategy-settings", (el) => actions.edit(el), <Settings2 size={13} />)}
+        {icon("Remove", "strategy-remove", () => actions.remove(), <Trash2 size={13} />)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Scatter points for each fill: arrow tips sit exactly at the fill price on the fill bar.
+ * A reversal (exit and new entry on the same bar, same side of the price) becomes one arrow
+ * with a two-line label, coloured by the new position.
+ */
+function strategyMarkers(bars: Bar[], bt: Backtest | null): object[] {
+  if (!bt) return [];
+  const index = new Map(bars.map((b, i) => [b.time, i]));
+  const merged = new Map<string, { i: number; price: number; up: boolean; color: string; lines: string[] }>();
+  const add = (time: number, price: number, up: boolean, color: string, text: string, isEntry: boolean) => {
+    const i = index.get(time);
+    if (i == null) return;
+    const key = `${i}|${up}`;
+    const m = merged.get(key);
+    if (!m) merged.set(key, { i, price, up, color, lines: [text] });
+    else {
+      m.lines = isEntry ? [...m.lines, text] : [text, ...m.lines]; // exit line first
+      if (isEntry) m.color = color;
+    }
+  };
+  for (const t of bt.trades) {
+    const long = t.side === "long";
+    if (!t.open && t.exit_time != null && t.exit_price != null) {
+      add(t.exit_time, t.exit_price, !long, strategyColors.exit, `Close ${long ? "−" : "+"}${t.qty}`, false);
+    }
+    add(t.entry_time, t.entry_price, long, long ? strategyColors.long : strategyColors.short, `${long ? "Long" : "Short"} +${t.qty}`, true);
+  }
+  return [...merged.values()].map((m) => ({
+    value: [m.i, m.price],
+    symbol: "arrow",
+    symbolSize: [9, 14],
+    symbolRotate: m.up ? 0 : 180,
+    symbolOffset: [0, m.up ? "50%" : "-50%"], // put the arrow's tip on the price
+    itemStyle: { color: m.color },
+    label: {
+      show: true,
+      formatter: m.up ? m.lines.join("\n") : [...m.lines].reverse().join("\n"),
+      position: m.up ? "bottom" : "top",
+      color: strategyColors.label,
+      fontSize: 10,
+      lineHeight: 12,
+    },
+  }));
+}
+
 function LowerLegend({ study, idx, top, actions }: { study: Study; idx: number; top: number; actions: StudyActions }) {
   return (
     <div
@@ -515,19 +689,19 @@ function LowerLegend({ study, idx, top, actions }: { study: Study; idx: number; 
   );
 }
 
-/** Popover to edit one indicator's settings. */
-function IndicatorSettings({
+/** Popover to edit an indicator's or strategy's settings. */
+function SettingsPopover({
   editing,
   onDraft,
   onCancel,
   onApply,
 }: {
-  editing: { ind: Indicator; draft: Record<string, string>; error: string; at: { top: number; left: number } };
+  editing: Editing;
   onDraft: (d: Record<string, string>) => void;
   onCancel: () => void;
   onApply: () => void;
 }) {
-  const entry = catalogEntry(editing.ind.type);
+  const entry = { name: editing.title, params: editing.params };
   return (
     <div
       data-study="settings"
@@ -558,6 +732,23 @@ function IndicatorSettings({
             />
           </label>
         ))}
+        {editing.select && (
+          <label className="flex items-center justify-between gap-3 text-[12px]">
+            <span className="text-muted">{editing.select.label}</span>
+            <select
+              data-testid={`settings-${editing.select.name}`}
+              value={editing.draft[editing.select.name]}
+              onChange={(e) => onDraft({ ...editing.draft, [editing.select!.name]: e.target.value })}
+              className="h-7 rounded border border-line bg-bg px-1.5 text-[12px] outline-none focus:border-accent"
+            >
+              {editing.select.options.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
       {editing.error && (
         <p role="alert" data-testid="settings-error" className="mt-2 text-[11px] text-down">
@@ -620,6 +811,8 @@ function Legend(
     overlays: Study[];
     volume: Indicator | null;
     actions: StudyActions;
+    strategyActions: StrategyActions | null;
+    backtest: Backtest | null;
     daily: boolean;
     narrow: boolean;
     collapsed: boolean;
@@ -699,8 +892,11 @@ function Legend(
               </button>
             </div>
           )}
-          {(p.volume || p.overlays.length > 0) && (
+          {(p.volume || p.overlays.length > 0 || p.strategy) && (
             <div className="-ml-1.5 flex flex-col items-start gap-0.5">
+              {p.strategy && p.strategyActions && (
+                <StrategyRow strategy={p.strategy} actions={p.strategyActions} backtest={p.backtest} />
+              )}
               {p.volume && bar && (
                 <StudyRow ind={p.volume} color={theme.muted} actions={p.actions}>
                   <span className="num text-text" data-testid="legend-vol">
@@ -836,6 +1032,7 @@ function buildOption(
   w: Window,
   widthPx: number,
   heightPx: number,
+  markers: object[] = [],
 ) {
   const last = bars[bars.length - 1];
   const lastUp = last ? last.c >= last.o : true;
@@ -976,6 +1173,15 @@ function buildOption(
               },
             }
           : undefined,
+      },
+      {
+        name: "strategy",
+        type: "scatter",
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: markers,
+        silent: true,
+        z: 5,
       },
       ...studies.overlays.filter((s) => !s.hidden).flatMap((s) => s.lines.map((l) => lineSeries(l, 0, 0))),
       ...studies.lowers.flatMap((s, i) => {

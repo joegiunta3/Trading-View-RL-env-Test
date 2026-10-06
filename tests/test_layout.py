@@ -45,6 +45,7 @@ def test_shrinking_keeps_hidden_pane_settings_and_resets_hidden_active_pane(ep):
         "ticker": "NVDA",
         "timeframe": "15m",
         "indicators": [{"type": "sma", "period": 50}],
+        "strategy": None,
     }
     assert ep.set_layout("4")["panes"][3]["ticker"] == "NVDA"
 
@@ -85,7 +86,13 @@ def test_setup_can_prepare_a_layout():
     )
     lay = e.get_layout()
     assert lay["layout"] == "4" and lay["active_pane"] == 2
-    assert lay["panes"][1] == {"pane": 1, "ticker": "GS", "timeframe": "1h", "indicators": []}
+    assert lay["panes"][1] == {
+        "pane": 1,
+        "ticker": "GS",
+        "timeframe": "1h",
+        "indicators": [],
+        "strategy": None,
+    }
     raises_engine(make_episode, setup={"layout": "2", "active_pane": 3}, status=422)
 
 

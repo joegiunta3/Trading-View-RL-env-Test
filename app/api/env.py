@@ -30,6 +30,12 @@ class IndicatorQuery(BaseModel):
     indicator: dict
 
 
+class BacktestQuery(BaseModel):
+    ticker: str
+    timeframe: str
+    strategy: dict
+
+
 class GradeIn(BaseModel):
     task_id: str
     answer: Any = None
@@ -83,6 +89,11 @@ def create_env_app(holder: EnvHolder) -> FastAPI:
     def indicator_values(body: IndicatorQuery) -> dict:
         """Indicator series (same formulas as the UI) for graders and task writers."""
         return ep().indicator_values(body.ticker, body.timeframe, body.indicator)
+
+    @app.post("/_env/backtest")
+    def backtest(body: BacktestQuery) -> dict:
+        """Strategy backtest (same engine as the UI's Strategy Tester) for graders and writers."""
+        return ep().backtest(body.ticker, body.timeframe, body.strategy)
 
     @app.post("/_env/grade")
     def grade(body: GradeIn) -> JSONResponse:

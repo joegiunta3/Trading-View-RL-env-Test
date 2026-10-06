@@ -30,6 +30,14 @@ export const theme = {
 /** Line colors for price overlays (SMA, EMA, BB, VWAP), assigned in order. */
 export const smaColors = ["#f2b84b", "#a68bff", "#3cc6c0", "#ff8f66", "#7fb2ff"] as const;
 
+/** Strategy markers: long entries blue, short entries red, exits magenta. */
+export const strategyColors = {
+  long: "#4c8dff",
+  short: "#f0525a",
+  exit: "#d16aff",
+  label: "#c3c9d4",
+} as const;
+
 /** Lower-pane indicator colors. */
 export const indicatorColors = {
   rsi: "#b48cff",

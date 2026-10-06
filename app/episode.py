@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app import indicators as indicators_lib
+from app import strategies
 from app.clock import ClockError, ClockMode, ClockState, SimClock
 from app.config import SESSION_DATES, SESSION_SECONDS, START_CASH_CENTS, TIME_SCALE
 from app.db import new_episode_db, state_hash
@@ -39,6 +40,17 @@ DEFAULT_TIMEFRAME = "5m"
 DEFAULT_INDICATORS = [{"type": "volume"}]
 LAYOUTS = {"1": 1, "2": 2, "3": 3, "4": 4}  # layout id -> visible panes
 PANES = 4
+_UNSET = object()  # "argument not given" (None means "remove")
+# strategy type -> {param: (default, min, max)}; plus "direction" (both|long|short) and "hidden"
+STRATEGY_PARAMS: dict[str, dict[str, tuple]] = {
+    "ma_cross": {"fast": (9, 1, 200), "slow": (21, 2, 400), "qty": (100, 1, 100_000)},
+    "rsi_reversal": {
+        "period": (14, 2, 100),
+        "oversold": (30, 1, 99),
+        "overbought": (70, 1, 99),
+        "qty": (100, 1, 100_000),
+    },
+}
 MAX_INDICATORS = 10
 MAX_LOWER_PANES = 3
 LOWER_PANE_INDICATORS = ("rsi", "macd", "kdj")
@@ -184,7 +196,8 @@ class Episode:
             if tf not in TIMEFRAMES:
                 raise EngineError(f"setup.panes[].timeframe {tf!r} is not valid", 422)
             inds = self._clean_indicators(p.get("indicators", DEFAULT_INDICATORS))
-            self._write_pane(pane, self._sid(p["ticker"]), tf, inds)
+            strat = self._clean_strategy(p.get("strategy"))
+            self._write_pane(pane, self._sid(p["ticker"]), tf, inds, strat)
         active = setup.get("active_pane", 0)
         if not isinstance(active, int) or not 0 <= active < LAYOUTS[layout]:
             raise EngineError("setup.active_pane must be a visible pane", 422)
@@ -715,12 +728,20 @@ class Episode:
                 f"Pane {pane} is not shown in the current {visible}-chart layout.", 404
             )
 
-    def _write_pane(self, pane: int, sid: int, timeframe: str, indicators: list[dict]) -> None:
+    def _write_pane(
+        self,
+        pane: int,
+        sid: int,
+        timeframe: str,
+        indicators: list[dict],
+        strategy: dict | None = None,
+    ) -> None:
+        dump = lambda v: json.dumps(v, sort_keys=True, separators=(",", ":"))  # noqa: E731
         self.conn.execute(
-            "INSERT INTO chart_panes VALUES (?,?,?,?) ON CONFLICT(pane_index) DO UPDATE SET "
+            "INSERT INTO chart_panes VALUES (?,?,?,?,?) ON CONFLICT(pane_index) DO UPDATE SET "
             "symbol_id = excluded.symbol_id, timeframe = excluded.timeframe, "
-            "indicators_json = excluded.indicators_json",
-            (pane, sid, timeframe, json.dumps(indicators, sort_keys=True, separators=(",", ":"))),
+            "indicators_json = excluded.indicators_json, strategy_json = excluded.strategy_json",
+            (pane, sid, timeframe, dump(indicators), None if strategy is None else dump(strategy)),
         )
 
     @_locked
@@ -739,6 +760,7 @@ class Episode:
                     "ticker": r["ticker"],
                     "timeframe": r["timeframe"],
                     "indicators": json.loads(r["indicators_json"]),
+                    "strategy": json.loads(r["strategy_json"]) if r["strategy_json"] else None,
                 }
                 for r in rows
             ],
@@ -774,8 +796,9 @@ class Episode:
         ticker: str | None = None,
         timeframe: str | None = None,
         indicators: list[dict] | None = None,
+        strategy: object = _UNSET,
     ) -> dict:
-        """Change a visible pane's symbol, timeframe and/or indicators."""
+        """Change a visible pane's symbol, timeframe, indicators and/or strategy (None removes it)."""
         with self._tx():
             self.sync()
             self._check_pane(pane)
@@ -789,7 +812,8 @@ class Episode:
             inds = self._clean_indicators(
                 indicators if indicators is not None else cur["indicators"]
             )
-            self._write_pane(pane, sid, tf, inds)
+            strat = cur["strategy"] if strategy is _UNSET else self._clean_strategy(strategy)
+            self._write_pane(pane, sid, tf, inds, strat)
             changes = {
                 k: v
                 for k, v in (
@@ -799,8 +823,67 @@ class Episode:
                 )
                 if v is not None
             }
+            if strategy is not _UNSET:
+                changes["strategy"] = strat
             self._log("PUT /api/panes", {"pane": pane, **changes})
             return self.get_layout()
+
+    @staticmethod
+    def _clean_strategy(cfg: dict | None) -> dict | None:
+        """Validate a strategy config (None = no strategy), fill defaults, canonical form."""
+        if cfg is None:
+            return None
+        kind = cfg.get("type")
+        spec = STRATEGY_PARAMS.get(kind)
+        if spec is None:
+            raise EngineError(
+                f"Unknown strategy {kind!r}. Available: {', '.join(STRATEGY_PARAMS)}.", 422
+            )
+        name = strategies.STRATEGY_NAMES[kind]
+        clean: dict = {"type": kind}
+        for param, (default, lo, hi) in spec.items():
+            v = cfg.get(param, default)
+            if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+                raise EngineError(f"{name} {param} must be a whole number from {lo} to {hi}.", 422)
+            clean[param] = v
+        direction = cfg.get("direction", "both")
+        if direction not in strategies.DIRECTIONS:
+            raise EngineError("direction must be one of both, long, short.", 422)
+        clean["direction"] = direction
+        if kind == "ma_cross" and clean["fast"] >= clean["slow"]:
+            raise EngineError("MA Crossover fast length must be shorter than slow length.", 422)
+        if kind == "rsi_reversal" and clean["oversold"] >= clean["overbought"]:
+            raise EngineError("RSI Reversal oversold level must be below overbought level.", 422)
+        hidden = cfg.get("hidden", False)
+        if not isinstance(hidden, bool):
+            raise EngineError("hidden must be true or false.", 422)
+        if hidden:
+            clean["hidden"] = True
+        return clean
+
+    def _closed_count(self, bars: list[dict]) -> int:
+        """How many of `bars` are complete: the newest is still forming while its session trades."""
+        now = self.clock.now
+        forming = phase(now) == "open" and bars and bars[-1]["date"] == SESSION_DATES[day_of(now)]
+        return len(bars) - 1 if forming else len(bars)
+
+    @_locked
+    def backtest(self, ticker: str, tf: str, strategy: dict) -> dict:
+        """Backtest `strategy` on `ticker`/`tf` bars up to now (no future data)."""
+        cfg = self._clean_strategy(strategy)
+        bars = self.bars(ticker, tf)
+        result = strategies.backtest(bars, self._closed_count(bars), cfg)
+        return {"ticker": self._ticker(self._sid(ticker)), "timeframe": tf, **result}
+
+    @_locked
+    def backtest_pane(self, pane: int) -> dict:
+        """Backtest of a visible pane's strategy on that pane's symbol and timeframe."""
+        self.sync()
+        self._check_pane(pane)
+        p = self.get_layout()["panes"][pane]
+        if p["strategy"] is None:
+            raise EngineError(f"Pane {pane} has no strategy.", 404)
+        return self.backtest(p["ticker"], p["timeframe"], p["strategy"])
 
     @staticmethod
     def _clean_indicators(indicators: list[dict]) -> list[dict]:

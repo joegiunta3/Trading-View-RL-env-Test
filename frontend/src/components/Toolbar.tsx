@@ -1,7 +1,7 @@
 import { AlarmClockPlus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marketStatus } from "../format";
-import type { Clock, Indicator, LayoutId, SymbolInfo } from "../types";
+import type { Clock, Indicator, LayoutId, Strategy, SymbolInfo } from "../types";
 import { IndicatorMenu } from "./IndicatorMenu";
 import { LayoutMenu } from "./LayoutMenu";
 import { Logo } from "./Logo";
@@ -17,6 +17,7 @@ type Props = {
   onTimeframe: (tf: string) => void;
   indicators: Indicator[];
   onAddIndicator: (ind: Indicator) => void;
+  onAddStrategy: (s: Strategy) => void;
   onIndicatorError: (message: string) => void;
   clock: Clock | null;
   connected: boolean;
@@ -49,7 +50,12 @@ export function Toolbar(p: Props) {
         ))}
       </div>
       <Divider />
-      <IndicatorMenu indicators={p.indicators} onAdd={p.onAddIndicator} onError={p.onIndicatorError} />
+      <IndicatorMenu
+        indicators={p.indicators}
+        onAdd={p.onAddIndicator}
+        onAddStrategy={p.onAddStrategy}
+        onError={p.onIndicatorError}
+      />
       <Button variant="ghost" data-testid="toolbar-alert" onClick={p.onAlert}>
         <AlarmClockPlus size={14} /> Alert
       </Button>
